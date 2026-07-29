@@ -9,5 +9,14 @@ package-lock.json
 flow-recorder.config.local.json
 .flow-recorder.local.json
 
+# Artefacts of running `flow-recorder init` inside this repo while dogfooding.
+# Consumers commit their own flow-recorder.config.json; here the shared example
+# is flow-recorder.config.example.json, so a real one is purely local.
+flow-recorder.config.json
+
+# Local agent state. `.claude/skills/record-flow/SKILL.md` is just a copy that
+# init drops in — skills/record-flow/SKILL.md is the source the package ships.
+.claude/
+
 .DS_Store
 *.log
