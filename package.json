@@ -45,13 +45,17 @@
     "test:config": "node test/config-test.js",
     "test:smoke": "node test/smoke-test.js",
     "test:trap": "node test/focus-trap-test.js",
-    "doctor": "node bin/cli.js doctor"
+    "doctor": "node bin/cli.js doctor",
+    "prepublishOnly": "npm test",
+    "release:patch": "npm version patch && npm publish && git push --follow-tags",
+    "release:minor": "npm version minor && npm publish && git push --follow-tags",
+    "release:major": "npm version major && npm publish && git push --follow-tags"
   },
   "dependencies": {
-    "playwright-core": ">=1.40.0"
+    "playwright-core": "^1.40.0"
   },
   "devDependencies": {
-    "playwright": ">=1.40.0"
+    "playwright": "^1.40.0"
   },
   "engines": {
     "node": ">=18"
