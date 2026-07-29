@@ -89,11 +89,24 @@ In guided mode: phrase every question in plain language with zero automation jar
    npx playwright-flow-recorder index --steps <domain>[,<domain>] --env <locatorKey>
    ```
    Grep/read the output file selectively; do not load the whole thing into context. If the flow wanders into another domain mid-session, rebuild with the extra `--steps` entry rather than falling back to an unscoped index.
-5. **Arm a watcher** so you wake without being pinged. Read `<outDir>/latest.txt` for the JSONL path, then:
+5. **Arm a watcher** so you wake without being pinged. Read `<outDir>/latest.txt` for the JSONL path, then arm this as a **persistent event stream** — a mechanism that delivers one notification *per line* for the whole session (Claude Code: the `Monitor` tool with `persistent: true`):
    ```bash
-   tail -n +1 -F "$FILE" | grep -m1 -E '"value":"(create-scenario|session-end|idle-activity)"'
+   tail -n 0 -F "$FILE" | grep -E --line-buffered '"value":"(create-scenario|session-end|idle-activity|widget-missing|widget-failed)"'
    ```
-   (`idle-activity` wakes you to warn a user who forgot ⏺ — re-arm afterwards.) `recording-stop` alone means a segment finished but the user may record more; note it, but conversion starts on ⚡, "done" in chat, or session end.
+   `--line-buffered` is required or matches sit in grep's buffer unseen. One stream covers every ⚡ in the session, so there is nothing to re-arm and no gap between segments.
+
+   > **NEVER arm this as a one-shot background command with `grep -m1`.** `grep` exits on the match, but `tail -F` only discovers the broken pipe the next time it *writes*. If the recording goes quiet after the ⚡ — which is exactly what happens when the user stops interacting and waits for you — `tail` never gets SIGPIPE, the pipeline hangs forever, and the completion notification never fires. This misbehaves as a heisenbug: it appears to work on a chatty page (background `net`/`nav` events keep tail writing, so it exits and notifies) and silently fails on a quiet one. Observed live: a ⚡ went unacknowledged until the user complained, with stale `tail` processes measured still alive 30+ minutes later, holding dead `grep`s downstream and watching sessions that had already ended. Killing them made every withheld notification fire at once.
+
+   If only one-shot background commands are available, make the command **exit on its own** — poll a count instead of piping into grep:
+   ```bash
+   n=$(grep -c '"value":"create-scenario"' "$FILE" 2>/dev/null || echo 0)
+   until [ "$(grep -c '"value":"create-scenario"' "$FILE" 2>/dev/null || echo 0)" -gt "$n" ]; do sleep 2; done
+   ```
+   That has no pipe to break and no replay problem, so it works identically on the first arm and every re-arm.
+
+   **Verify the watcher is actually alive rather than assuming it.** If the user says they clicked ⚡ and you have heard nothing, check the queue file *immediately* and believe the file over your watcher. A dead watcher costs a wake, never a request — the queue holds it — so drain it, and say plainly that the notification failed and how long it sat. Never imply the click was lost, and never imply it just arrived.
+
+   (`idle-activity` warns a user who forgot ⏺.) `recording-stop` alone means a segment finished but the user may record more; note it, but conversion starts on ⚡, "done" in chat, or session end.
 6. **Tell the user**: session is idle — log in and navigate freely; hit ⏺ where the scenario starts; ✎ / Alt+Click for assertions; ⏹ when done; ⚡ to hand it over.
 
 ### THE QUEUE (durable — a ⚡ click is never lost)
@@ -108,18 +121,52 @@ Every ⚡ appends the stopped-but-not-yet-queued segment(s). Because it's a file
 
 **DRAIN LOOP (mandatory — never leave the user blind after ⚡).** The moment you register a `create-scenario` (watcher wake OR the user saying they clicked ⚡):
 
+0. **Say so in chat, immediately, before any analysis.** One or two lines, named and specific:
+
+   > Got your ⚡ — picked up **2 scenarios** (`approve first pending order`, `reject with reason`). Starting on the first now: reading the segment and matching it against the step index.
+
+   This is not optional and it is not the ack file. The user is sitting in the chat window with no idea whether their click reached anything — the widget only ever says "queued", and a silent agent is indistinguishable from a broken one. **Acknowledge before you read the segment, before the reconciliation, before any tool call that takes time.** If you notice you have been working silently for more than a couple of steps, say where you are right now rather than waiting to present a finished result.
+
+   Then keep it alive as you go: one short line per scenario as you move ("`approve first pending order` → matched 4 existing steps, 1 new; dry-running now"), and one line when each lands. Long silences are the failure this rule exists to prevent — **especially** when a step is slow, because that is exactly when the user starts wondering if it worked.
+
+   If you discover the click arrived late (a watcher that died, a wake you missed), say that plainly and note the queue held it — never let the user think their click was lost, and never let them think it was instant when it wasn't.
+
 1. Read `<jsonl-path>.queue.json`. Process `status:"queued"` items **in order, one at a time**.
-2. Before touching an item, write the ack sidecar `<jsonl-path>.ack` marking it `working`, so the widget flips from "waiting…" to live status:
+2. Before touching an item, write the ack sidecar `<jsonl-path>.ack` marking it `working`. The widget renders this as a **detail card per scenario**, so write it for a human reading a popup, not as a log line:
    ```json
-   { "items": { "q1": { "status": "done", "message": "added to orders.feature" },
-                "q2": { "status": "working", "message": "reconciling steps" } },
+   { "items": {
+       "q1": { "status": "done",
+               "message": "Appended to orders.feature as @recorded @wip.",
+               "detail": ["3 assertions carried over", "dry-run green"],
+               "steps": { "reuse": 6, "new": 1, "healed": 1 },
+               "file": "features/orders.feature" },
+       "q2": { "status": "working",
+               "message": "Reconciling against the step index.",
+               "detail": ["matched an existing click step for rejectBtn",
+                          "reason text looks like fixture data — will confirm"],
+               "steps": { "reuse": 4, "new": 2 } },
+       "q3": { "status": "queued" } },
      "current": "q2" }
    ```
-   Keep prior items' final statuses when you rewrite it (you own this file; the recorder only reads it) so the widget shows "✓ 1 · ⏳ …". Statuses: `working` → `done` | `error`; update `message` as you progress.
+   | Field | |
+   |---|---|
+   | `status` | `queued` → `working` → `done` \| `error`. Drives the card's colour and pill. |
+   | `message` | **One sentence, plain language, rendered in full.** What is happening now, or what landed. Not "reconciling" — "Reconciling against the step index." |
+   | `detail` | Up to 6 short lines: what you matched, what you had to invent, what you are unsure about, why a dry-run failed. This is where the user's real questions get answered. |
+   | `steps` | `{reuse, new, healed}` counts — shown as "6 reused, 1 new, 1 healed". The fastest signal that reuse actually happened. |
+   | `file` | Destination path, shown monospaced. Answers "where did my scenario go". |
+
+   Only `status` is required; everything else is optional and older acks (including the legacy single-object `{status,message}`) still render. **Rewrite the whole file each time, keeping prior items' final statuses** — you own this file, the recorder only reads it.
+
+   Update it as you move rather than once at the end: the card is live, and a `working` card whose message never changes looks identical to a stuck agent.
 3. After finishing an item, **re-read the queue file** — the user may have clicked ⚡ again while you worked; late additions drain in the same loop.
 4. When no `queued`/`working` items remain, **re-arm the watcher** and tell the user.
 
-Writing the first `working` ack is the FIRST thing you do on wake — before debriefing — because it's the user's only signal you received the request. In queue mode the user has usually moved on, so favour best-effort inference from notes/asserts/provenance, leave `TODO(data):` comments where a decision is uncertain, and surface one consolidated data debrief after the drain rather than blocking per item (everything is `@wip` and human-reviewed anyway).
+**Two ways you arrive at a drain.** Either you were already watching (the watcher above), or the project set `onCreate` in its config and the ⚡ click **spawned you** — in which case `FLOW_QUEUE_FILE`, `FLOW_SESSION_FILE`, `FLOW_ACK_FILE`, `FLOW_SCENARIOS` and `FLOW_PROJECT_ROOT` are already in your environment and there was no live session to follow. Prefer those env vars over re-deriving paths from `latest.txt` when they are set, and go straight to the drain loop: nobody is reading chat, so the ack file is your only channel. Only one hook runs at a time, so anything queued while you worked is waiting for *this* run — re-read the queue before you finish.
+
+**Two channels, both required, different audiences.** The chat line (step 0) is for the person watching the conversation; the `.ack` file is for the person watching the browser HUD. Neither substitutes for the other — someone mid-recording never reads chat, and someone who has switched to their editor never sees the widget. When the ⚡ *spawned* you via `onCreate` there is no chat to write to, so the ack file carries everything.
+
+Writing the first `working` ack is the FIRST file you touch on wake — before debriefing — because it's the HUD's only signal you received the request. In queue mode the user has usually moved on, so favour best-effort inference from notes/asserts/provenance, leave `TODO(data):` comments where a decision is uncertain, and surface one consolidated data debrief after the drain rather than blocking per item (everything is `@wip` and human-reviewed anyway).
 
 ## Phase 2 — Follow along (live mode)
 

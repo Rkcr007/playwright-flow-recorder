@@ -42,6 +42,12 @@ const DEFAULTS = {
   // --- agent / conversion ---
   userMode: 'expert', // 'expert' | 'guided'
   agentName: 'the AI agent',
+  // Command run when the user clicks ⚡, so the queue actually reaches an agent
+  // instead of waiting for one to notice the file. OPT-IN: empty means nothing is
+  // ever spawned. String → run through the shell (quotes and pipes work); array →
+  // spawned directly with no shell. Context arrives as FLOW_* env vars, never as
+  // string interpolation. See runCreateHook in recorder.js.
+  onCreate: '',
   conventions: {
     framework: 'generic', // cucumber-playwright | playwright-test | codeceptjs | cypress | generic
     featureDir: 'features',
