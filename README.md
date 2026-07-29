@@ -49,9 +49,21 @@ from steps that already exist in your framework, and the stream contains only si
     ⠿  ●  [ approve first order    ]  ⏺ record   ✎ note   ⚡ create    ⏳ 1 queued · ✓ 2
     ▲  ▲   ▲                          ▲          ▲        ▲            ▲
     │  │   scenario name              start/     free-    hand to      live agent
-    │  │                              stop       text     the agent    progress
-    │  └─ red = idle · green pulse = recording
+    │  │                              stop       text     the agent    progress ← click me
+    │  └─ grey = idle · red pulse = recording (the bar gains a red rim too)
     └─ drag the widget anywhere
+
+    ┌─ hand-off to the AI agent ───────────────────────────┐
+    │ approve first pending order                   DONE   │
+    │ segment 1                                            │
+    │ Appended to orders.feature as @recorded @wip.        │
+    │ · 3 assertions carried over                          │
+    │ · steps: 6 reused, 1 new, 1 healed                   │
+    │ features/orders.feature                              │
+    ├──────────────────────────────────────────────────────┤
+    │ reject with reason                          WORKING  │
+    │ Reconciling against the step index.                  │
+    └──────────────────────────────────────────────────────┘
 ```
 
 | Control | What it does |
@@ -61,10 +73,26 @@ from steps that already exist in your framework, and the stream contains only si
 | **⌥/Alt+Click** | Assert an element **without triggering it**. A palette asks *what* to verify: has text / visible / enabled / editable / checked / this row / disappears later. |
 | **⚡ create** | Queue the finished segment(s) for the agent. Durable — clicking it while the agent is busy never loses work. Queuing is not delivery: without an [`onCreate`](#making--actually-reach-an-agent) hook an agent has to come and read the queue. |
 | **⠿** | Drag the widget out of the way. |
+| **the progress chip** | Click it to open the **hand-off panel** — one card per scenario showing what the agent is doing right now. |
 
 The name and note box stays typeable **even while a modal or drawer is open** — the widget escapes
 the focus trap that Radix/MUI/Headless UI style dialogs install. That took a capture-phase guard and
 has its own regression test, because notes silently vanishing is worse than no notes at all.
+
+### Watching the hand-off
+
+Clicking ⚡ used to leave you guessing. The panel is the answer: it opens itself when a scenario
+starts being worked, finishes, or fails, and shows per scenario —
+
+- the **status** (queued / working / done / failed), colour-coded
+- the agent's **message** in full, not truncated
+- **detail lines**: what it matched, what it had to invent, what it's unsure about
+- **step counts** — `6 reused, 1 new, 1 healed`, the quickest proof reuse actually happened
+- the **destination file**, so "where did my scenario go" is never a question
+
+All of it comes from the agent's `<session>.jsonl.ack` sidecar, so this is real progress rather than
+a spinner. Dismiss it with ✕ and it stays shut until the next status change; the chip reopens it.
+Agents that write only `{status, message}` still render fine — everything else is optional.
 
 ## Quick start
 
@@ -167,7 +195,7 @@ Discovery walks up from the current directory: `flow-recorder.config.json`, then
 | `chromeProfileDir` | `~/.flow-recorder-chrome-profile` | persistent login profile |
 | `chromePath` | auto-detected | explicit browser binary |
 | `maskPattern` | `pass\|pwd\|otp\|pin\|secret\|token\|cvv\|card.?number` | fields recorded as `***masked***` |
-| `typeDebounceMs` | `900` | how long a typing pause ends a `type` event |
+| `typeDebounceMs` | `900` | how long a typing pause ends a `type` event — also flushed early by Enter, blur, a click elsewhere, or navigation, so a submitted value is never lost |
 | `captureNetwork` | `true` | record XHR/fetch during segments |
 | `userMode` | `expert` | `guided` = plain-language mode for manual testers |
 | `agentName` | `the AI agent` | shown in the widget |
@@ -294,17 +322,29 @@ npm install
 npm test
 ```
 
-Three suites, no mocks of the thing under test:
+Eight suites, 104 checks, no mocks of the thing under test — every browser test drives the real CLI
+against a real headless Chromium over CDP:
 
 - **`config-test.js`** — 25 checks on config discovery, upward search, deep-merged local
   overrides, precedence, `~` expansion, malformed-JSON handling, path validation.
-- **`smoke-test.js`** — drives the real CLI against a headless Chromium and asserts the stream
-  contains *exactly* the segment: idle clicks dropped, passwords masked, palette predicates
-  recorded, row context attached, the durable queue accumulating two scenarios, and agent ack
-  statuses merging into the widget state.
+- **`smoke-test.js`** — asserts the stream contains *exactly* the segment: idle clicks dropped,
+  passwords masked, palette predicates recorded, row context attached, the durable queue
+  accumulating two scenarios, and agent ack statuses merging into the widget state.
 - **`focus-trap-test.js`** — mounts a Radix-style capture-phase focus trap and proves
   *differentially* that a plain outside input gets its focus stolen (the trap is real) while the
   widget's note box does not (the guard works).
+- **`widget-mount-test.js`** — the two ways the HUD could silently fail to appear: a Trusted-Types
+  page rejecting `innerHTML`, and a launched browser with zero pages.
+- **`type-flush-test.js`** — every typing case interrupted *inside* the debounce window (Enter,
+  click elsewhere, blur, navigation). A missing flush means a missing value, which is how a typed
+  search term used to vanish from the stream entirely.
+- **`reinject-test.js`** — edits `inject.js`, re-attaches to a page that is never reloaded, and
+  proves the new build replaces the old one without double-emitting. A config-only change counts too.
+- **`oncreate-hook-test.js`** — the ⚡ hook fires with real context in `FLOW_*` env vars,
+  `--no-hooks` wins, and a second ⚡ mid-run does not spawn a second agent.
+- **`ack-panel-test.js`** — the hand-off panel renders names, messages, detail lines, step counts
+  and destination files untruncated, reopens on a status change after a manual dismiss, and still
+  understands a legacy single-object ack.
 
 ## Docs
 

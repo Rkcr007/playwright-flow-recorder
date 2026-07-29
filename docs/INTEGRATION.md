@@ -156,6 +156,46 @@ your-repo/
 `init` adds `.flow-recorder/` and `flow-recorder.config.local.json` to your `.gitignore`.
 Recordings stay out of git because they contain application data.
 
+## The two hand-off sidecars
+
+Two files, two owners, no locking. The widget shows a merge of both, so the user always sees where
+each scenario is.
+
+**`<session>.jsonl.queue.json` — the recorder writes it.** Append-only list of ⚡ requests, so a
+click survives an agent that isn't listening:
+
+```json
+[{ "id": "q1", "scenario": "approve first pending order", "segment": 1,
+   "status": "queued", "enqueuedAt": "2026-07-29T21:40:13.804Z" }]
+```
+
+**`<session>.jsonl.ack` — the agent writes it.** Per-item progress, keyed by queue id. This is what
+the HUD's hand-off panel renders, so write it for a person reading a popup:
+
+```json
+{ "items": {
+    "q1": { "status": "done",
+            "message": "Appended to orders.feature as @recorded @wip.",
+            "detail": ["3 assertions carried over", "dry-run green"],
+            "steps": { "reuse": 6, "new": 1, "healed": 1 },
+            "file": "features/orders.feature" },
+    "q2": { "status": "working", "message": "Reconciling against the step index." } },
+  "current": "q2" }
+```
+
+| Field | Required | |
+|---|---|---|
+| `status` | yes | `queued` → `working` → `done` \| `error` |
+| `message` | no | One plain sentence, rendered in full |
+| `detail` | no | Up to 6 short lines — matches, inventions, uncertainties |
+| `steps` | no | `{reuse, new, healed}` counts |
+| `file` | no | Destination path, shown monospaced |
+
+Rewrite the whole file each time, keeping earlier items' final statuses. Only `status` matters; an
+agent writing just `{status, message}` — or the legacy single-object `{"status","message","current"}`
+form — renders correctly. Write the first `working` ack **before** starting work: it is the only
+signal reaching a user who is watching the browser rather than the chat.
+
 ## Per-user overrides
 
 Anything personal goes in `flow-recorder.config.local.json`, which is gitignored and
