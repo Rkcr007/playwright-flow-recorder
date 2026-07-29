@@ -326,6 +326,14 @@ const record = async (argv = []) => {
             segment: q.segment,
             status: (st && st.status) || q.status,
             message: (st && st.message) || '',
+            // Optional richer fields the agent may write. The bar's chip can only
+            // carry a couple of words, which made detailed acks pointless; the
+            // widget's detail panel renders these instead. All optional: an agent
+            // that writes only {status,message} keeps working exactly as before.
+            detail: Array.isArray(st && st.detail) ? st.detail.slice(0, 6).map(String) : [],
+            file: (st && st.file) || '',
+            steps: st && st.steps && typeof st.steps === 'object' ? st.steps : null,
+            enqueuedAt: q.enqueuedAt || null,
           };
         });
         return { recording: state.recording, scenario: state.scenario, segments: state.segments, queue };

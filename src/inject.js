@@ -604,9 +604,14 @@
     // touching it — this runs only in Chrome via CDP, so :has() is always available.
     root.appendChild(
       styleTag(
-        '.bar{display:flex;gap:8px;align-items:center;pointer-events:auto;color-scheme:dark;' +
+        // On :host, not on .bar — the detail panel is a SIBLING of the bar, so a font
+        // set only on .bar left the panel inheriting the page's default and rendering
+        // in serif. Anything added to this shadow root inherits from here.
+        ':host{color-scheme:dark;' +
           "font:500 12px/1.35 -apple-system,BlinkMacSystemFont,'Segoe UI',Inter,Roboto,'Helvetica Neue',sans-serif;" +
-          'color:#e8eaed;padding:6px 8px;border-radius:12px;' +
+          'color:#e8eaed}' +
+          '.bar{display:flex;gap:8px;align-items:center;pointer-events:auto;' +
+          'padding:6px 8px;border-radius:12px;' +
           'background:linear-gradient(180deg,rgba(28,31,38,.93),rgba(17,19,24,.95));' +
           'border:1px solid rgba(255,255,255,.14);' +
           '-webkit-backdrop-filter:blur(14px) saturate(140%);backdrop-filter:blur(14px) saturate(140%);' +
@@ -656,10 +661,45 @@
           // Only becomes a chip when it has something to say, so an empty HUD stays clean.
           '#qs:not(:empty){padding:3px 8px;border-radius:999px;background:rgba(255,255,255,.07);' +
           'border:1px solid rgba(255,255,255,.1)}' +
+          '#qs{cursor:pointer}' +
+          // --- hand-off detail panel: same glass, hangs below the bar ---
+          '#panel{display:none;margin-top:8px;max-width:380px;max-height:60vh;overflow-y:auto;font:inherit;color:inherit;' +
+          'pointer-events:auto;padding:8px;border-radius:12px;text-align:left;' +
+          'background:linear-gradient(180deg,rgba(28,31,38,.95),rgba(17,19,24,.97));' +
+          'border:1px solid rgba(255,255,255,.14);' +
+          '-webkit-backdrop-filter:blur(14px) saturate(140%);backdrop-filter:blur(14px) saturate(140%);' +
+          'box-shadow:0 14px 38px rgba(0,0,0,.48),inset 0 1px 0 rgba(255,255,255,.07);' +
+          'animation:flowrecin 140ms ease-out}' +
+          '.phd{display:flex;align-items:center;justify-content:space-between;gap:8px;' +
+          'color:rgba(232,234,237,.55);font-size:10px;font-weight:600;letter-spacing:.06em;' +
+          'text-transform:uppercase;padding:1px 2px 6px}' +
+          '.pclose{padding:2px 6px;font-size:11px;line-height:1;border-radius:6px}' +
+          '.pcard{padding:7px 9px;border-radius:9px;margin-bottom:6px;' +
+          'background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.09);' +
+          'border-left:3px solid rgba(255,255,255,.18)}' +
+          '.pcard:last-child{margin-bottom:0}' +
+          '.pcard.working{border-left-color:#6366f1;background:rgba(99,102,241,.1)}' +
+          '.pcard.done{border-left-color:#22c55e}' +
+          '.pcard.error{border-left-color:#ef4444;background:rgba(239,68,68,.1)}' +
+          '.prow{display:flex;align-items:center;justify-content:space-between;gap:8px}' +
+          '.pname{font-weight:600;font-size:12px;color:#f3f4f6;overflow:hidden;' +
+          'text-overflow:ellipsis;white-space:nowrap}' +
+          '.pill{flex:none;font-size:9px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;' +
+          'padding:2px 7px;border-radius:999px;background:rgba(255,255,255,.1);color:rgba(232,234,237,.75)}' +
+          '.pill.working{background:rgba(99,102,241,.28);color:#c7d2fe}' +
+          '.pill.done{background:rgba(34,197,94,.22);color:#bbf7d0}' +
+          '.pill.error{background:rgba(239,68,68,.24);color:#fecaca}' +
+          '.pmeta{font-size:10px;color:rgba(232,234,237,.4);margin-top:2px}' +
+          '.pmsg{font-size:11px;color:#e2e8f0;margin-top:4px;line-height:1.45}' +
+          '.pdet{font-size:11px;color:rgba(232,234,237,.62);margin-top:2px;line-height:1.45}' +
+          '.pdet.dim{color:rgba(232,234,237,.42)}' +
+          '.pfile{font-size:10px;margin-top:4px;color:#a5b4fc;' +
+          "font-family:ui-monospace,SFMono-Regular,Menlo,monospace;overflow:hidden;" +
+          'text-overflow:ellipsis;white-space:nowrap}' +
           '@keyframes flowrecpulse{50%{opacity:.5;box-shadow:0 0 0 5px rgba(239,68,68,.1),0 0 10px rgba(239,68,68,.3)}}' +
           '@keyframes flowrecin{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}' +
           '@media (prefers-reduced-motion:reduce){#dot.live{animation:none}' +
-          '.bar{animation:none}button,input,#grip{transition:none}}'
+          '.bar,#panel{animation:none}button,input,#grip{transition:none}}'
       )
     );
     root.appendChild(
@@ -677,8 +717,13 @@
           title: 'queue this scenario for ' + AGENT + ' to create',
           text: '⚡ create',
         }),
-        mk('span', { id: 'qs', role: 'status', 'aria-live': 'polite' }),
+        mk('span', { id: 'qs', role: 'status', 'aria-live': 'polite', title: 'click for details' }),
       ])
+    );
+    // Detail panel: a sibling of the bar so it can never change the bar's own layout
+    // (the mount test measures `.bar`, and the drag positions the host).
+    root.appendChild(
+      mk('div', { id: 'panel', role: 'region', 'aria-label': 'hand-off details' })
     );
     const rec = root.getElementById('rec');
     const noteBtn = root.getElementById('note');
@@ -686,6 +731,7 @@
     const inp = root.getElementById('inp');
     const dot = root.getElementById('dot');
     const qs = root.getElementById('qs');
+    const panel = root.getElementById('panel');
     let recording = false;
     let segments = 0;
     let noteMode = false;
@@ -737,7 +783,84 @@
       const er = by('error'); if (er.length) parts.push('⚠ ' + er.length);
       if (!working && !q && d && !er.length) qs.textContent = '✓ all ' + d + ' done';
       else qs.textContent = parts.join(' · ');
+      renderPanel(queue);
     };
+
+    // --- detail panel -----------------------------------------------------------
+    // The chip in the bar can hold a couple of words, so a detailed ack had nowhere
+    // to go: the user clicked ⚡ and got "1 queued" with no idea which scenario was
+    // being worked, what the agent was doing, or where the output landed. This panel
+    // is that answer — one card per queued scenario, fed by the same ack file.
+    //
+    // It opens itself on the transitions worth interrupting for (an item starts
+    // working, finishes, or errors) and can be toggled from the chip. Once the user
+    // closes it manually it stays closed until the next such transition, so it never
+    // fights someone who dismissed it.
+    let panelOpen = false;
+    let panelPinnedShut = false;
+    let lastSig = '';
+    const statusLabel = { queued: 'queued', working: 'working', done: 'done', error: 'failed' };
+    const renderPanel = (queue) => {
+      // Finished items stay listed: "which of my three scenarios landed where" is
+      // the question the panel exists to answer, and it survives the drain.
+      const items = queue || [];
+      // Auto-open when any item changes into a state the user is waiting to hear about.
+      const sig = items.map((q) => q.id + ':' + q.status + ':' + q.message).join('|');
+      const notable = items.some((q) => q.status === 'working' || q.status === 'error' || q.status === 'done');
+      if (sig !== lastSig) {
+        const prev = lastSig;
+        lastSig = sig;
+        // A brand-new status (not just a message tweak) re-opens even after a dismiss.
+        const statusesOf = (s) => s.split('|').map((x) => x.split(':').slice(0, 2).join(':')).join('|');
+        if (statusesOf(sig) !== statusesOf(prev)) {
+          panelPinnedShut = false;
+          if (notable) panelOpen = true;
+        }
+      }
+      if (!items.length) { panelOpen = false; panel.replaceChildren(); panel.style.display = 'none'; return; }
+      panel.style.display = panelOpen && !panelPinnedShut ? 'block' : 'none';
+      if (!panelOpen || panelPinnedShut) return;
+
+      const cards = [
+        mk('div', { class: 'phd' }, [
+          mk('span', { text: 'hand-off to ' + AGENT }),
+          mk('button', { id: 'pclose', class: 'pclose', title: 'hide details', text: '✕' }),
+        ]),
+      ];
+      for (const q of items) {
+        const st = q.status || 'queued';
+        const rows = [
+          mk('div', { class: 'prow' }, [
+            mk('span', { class: 'pname', text: q.scenario || '(unnamed)' }),
+            mk('span', { class: 'pill ' + st, text: statusLabel[st] || st }),
+          ]),
+          mk('div', { class: 'pmeta', text: 'segment ' + q.segment }),
+        ];
+        if (q.message) rows.push(mk('div', { class: 'pmsg', text: q.message }));
+        for (const d of q.detail || []) rows.push(mk('div', { class: 'pdet', text: '· ' + d }));
+        if (q.steps) {
+          const s = q.steps;
+          const bits = [];
+          if (s.reuse != null) bits.push(s.reuse + ' reused');
+          if (s.new != null) bits.push(s.new + ' new');
+          if (s.healed != null) bits.push(s.healed + ' healed');
+          if (bits.length) rows.push(mk('div', { class: 'pdet', text: '· steps: ' + bits.join(', ') }));
+        }
+        if (q.file) rows.push(mk('div', { class: 'pfile', text: q.file }));
+        if (st === 'queued' && !HAS_HOOK) {
+          rows.push(mk('div', { class: 'pdet dim', text: '· waiting for ' + AGENT + ' to pick this up' }));
+        }
+        cards.push(mk('div', { class: 'pcard ' + st }, rows));
+      }
+      panel.replaceChildren(...cards);
+      const close = panel.querySelector('#pclose');
+      if (close) close.addEventListener('click', () => { panelPinnedShut = true; panelOpen = false; renderPanel(queue); });
+    };
+    qs.addEventListener('click', () => {
+      panelPinnedShut = false;
+      panelOpen = !panelOpen;
+      poll();
+    });
     const syncState = (st) => {
       if (!st) return;
       setRecUI(st.recording, st.scenario);

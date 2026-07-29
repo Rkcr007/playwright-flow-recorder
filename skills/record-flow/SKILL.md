@@ -132,13 +132,33 @@ Every ⚡ appends the stopped-but-not-yet-queued segment(s). Because it's a file
    If you discover the click arrived late (a watcher that died, a wake you missed), say that plainly and note the queue held it — never let the user think their click was lost, and never let them think it was instant when it wasn't.
 
 1. Read `<jsonl-path>.queue.json`. Process `status:"queued"` items **in order, one at a time**.
-2. Before touching an item, write the ack sidecar `<jsonl-path>.ack` marking it `working`, so the widget flips from "waiting…" to live status:
+2. Before touching an item, write the ack sidecar `<jsonl-path>.ack` marking it `working`. The widget renders this as a **detail card per scenario**, so write it for a human reading a popup, not as a log line:
    ```json
-   { "items": { "q1": { "status": "done", "message": "added to orders.feature" },
-                "q2": { "status": "working", "message": "reconciling steps" } },
+   { "items": {
+       "q1": { "status": "done",
+               "message": "Appended to orders.feature as @recorded @wip.",
+               "detail": ["3 assertions carried over", "dry-run green"],
+               "steps": { "reuse": 6, "new": 1, "healed": 1 },
+               "file": "features/orders.feature" },
+       "q2": { "status": "working",
+               "message": "Reconciling against the step index.",
+               "detail": ["matched an existing click step for rejectBtn",
+                          "reason text looks like fixture data — will confirm"],
+               "steps": { "reuse": 4, "new": 2 } },
+       "q3": { "status": "queued" } },
      "current": "q2" }
    ```
-   Keep prior items' final statuses when you rewrite it (you own this file; the recorder only reads it) so the widget shows "✓ 1 · ⏳ …". Statuses: `working` → `done` | `error`; update `message` as you progress.
+   | Field | |
+   |---|---|
+   | `status` | `queued` → `working` → `done` \| `error`. Drives the card's colour and pill. |
+   | `message` | **One sentence, plain language, rendered in full.** What is happening now, or what landed. Not "reconciling" — "Reconciling against the step index." |
+   | `detail` | Up to 6 short lines: what you matched, what you had to invent, what you are unsure about, why a dry-run failed. This is where the user's real questions get answered. |
+   | `steps` | `{reuse, new, healed}` counts — shown as "6 reused, 1 new, 1 healed". The fastest signal that reuse actually happened. |
+   | `file` | Destination path, shown monospaced. Answers "where did my scenario go". |
+
+   Only `status` is required; everything else is optional and older acks (including the legacy single-object `{status,message}`) still render. **Rewrite the whole file each time, keeping prior items' final statuses** — you own this file, the recorder only reads it.
+
+   Update it as you move rather than once at the end: the card is live, and a `working` card whose message never changes looks identical to a stuck agent.
 3. After finishing an item, **re-read the queue file** — the user may have clicked ⚡ again while you worked; late additions drain in the same loop.
 4. When no `queued`/`working` items remain, **re-arm the watcher** and tell the user.
 
