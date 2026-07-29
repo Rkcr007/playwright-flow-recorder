@@ -89,17 +89,24 @@ In guided mode: phrase every question in plain language with zero automation jar
    npx playwright-flow-recorder index --steps <domain>[,<domain>] --env <locatorKey>
    ```
    Grep/read the output file selectively; do not load the whole thing into context. If the flow wanders into another domain mid-session, rebuild with the extra `--steps` entry rather than falling back to an unscoped index.
-5. **Arm a watcher** so you wake without being pinged. Read `<outDir>/latest.txt` for the JSONL path, then:
+5. **Arm a watcher** so you wake without being pinged. Read `<outDir>/latest.txt` for the JSONL path, then arm this as a **persistent event stream** — a mechanism that delivers one notification *per line* for the whole session (Claude Code: the `Monitor` tool with `persistent: true`):
    ```bash
-   tail -n +1 -F "$FILE" | grep -m1 -E '"value":"(create-scenario|session-end|idle-activity)"'   # FIRST arm only
+   tail -n 0 -F "$FILE" | grep -E --line-buffered '"value":"(create-scenario|session-end|idle-activity|widget-missing|widget-failed)"'
    ```
-   **Every RE-arm must use `tail -n 0`, not `tail -n +1`.** `-n +1` replays the file from line 1, instantly re-matches the marker you just handled, and `grep -m1` exits on it — the watcher is dead within milliseconds and the user's next ⚡ wakes nobody:
-   ```bash
-   tail -n 0 -F "$FILE" | grep -m1 -E '"value":"(create-scenario|session-end|idle-activity)"'    # every re-arm
-   ```
-   A dead watcher costs a wake, never a request — the queue file still holds it, so drain on the next wake and apologise for the lag rather than telling the user the click was lost.
+   `--line-buffered` is required or matches sit in grep's buffer unseen. One stream covers every ⚡ in the session, so there is nothing to re-arm and no gap between segments.
 
-   (`idle-activity` wakes you to warn a user who forgot ⏺ — re-arm afterwards.) `recording-stop` alone means a segment finished but the user may record more; note it, but conversion starts on ⚡, "done" in chat, or session end.
+   > **NEVER arm this as a one-shot background command with `grep -m1`.** `grep` exits on the match, but `tail -F` only discovers the broken pipe the next time it *writes*. If the recording goes quiet after the ⚡ — which is exactly what happens when the user stops interacting and waits for you — `tail` never gets SIGPIPE, the pipeline hangs forever, and the completion notification never fires. This misbehaves as a heisenbug: it appears to work on a chatty page (background `net`/`nav` events keep tail writing, so it exits and notifies) and silently fails on a quiet one. Observed live: a ⚡ went unacknowledged until the user complained, with stale `tail` processes measured still alive 30+ minutes later, holding dead `grep`s downstream and watching sessions that had already ended. Killing them made every withheld notification fire at once.
+
+   If only one-shot background commands are available, make the command **exit on its own** — poll a count instead of piping into grep:
+   ```bash
+   n=$(grep -c '"value":"create-scenario"' "$FILE" 2>/dev/null || echo 0)
+   until [ "$(grep -c '"value":"create-scenario"' "$FILE" 2>/dev/null || echo 0)" -gt "$n" ]; do sleep 2; done
+   ```
+   That has no pipe to break and no replay problem, so it works identically on the first arm and every re-arm.
+
+   **Verify the watcher is actually alive rather than assuming it.** If the user says they clicked ⚡ and you have heard nothing, check the queue file *immediately* and believe the file over your watcher. A dead watcher costs a wake, never a request — the queue holds it — so drain it, and say plainly that the notification failed and how long it sat. Never imply the click was lost, and never imply it just arrived.
+
+   (`idle-activity` warns a user who forgot ⏺.) `recording-stop` alone means a segment finished but the user may record more; note it, but conversion starts on ⚡, "done" in chat, or session end.
 6. **Tell the user**: session is idle — log in and navigate freely; hit ⏺ where the scenario starts; ✎ / Alt+Click for assertions; ⏹ when done; ⚡ to hand it over.
 
 ### THE QUEUE (durable — a ⚡ click is never lost)
