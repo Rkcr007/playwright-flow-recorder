@@ -1,0 +1,34 @@
+{
+  "//": "Copy to flow-recorder.config.json (or run `npx playwright-flow-recorder init` to generate one from your repo layout). Every key is optional — delete what you don't need.",
+
+  "attachPort": 9222,
+  "startUrl": "",
+  "outDir": ".flow-recorder/recordings",
+  "indexFile": ".flow-recorder/step-index.json",
+  "chromeProfileDir": "~/.flow-recorder-chrome-profile",
+  "chromePath": "",
+
+  "maskPattern": "pass|pwd|otp|pin|secret|token|cvv|card.?number",
+  "typeDebounceMs": 900,
+  "captureNetwork": true,
+
+  "userMode": "expert",
+  "agentName": "the AI agent",
+
+  "conventions": {
+    "//": "Everything the AI converter needs to know about YOUR project. The recorder itself never reads this block.",
+
+    "framework": "cucumber-playwright",
+    "featureDir": "features",
+    "stepLibrary": ["features/step_definitions"],
+    "primaryStepFile": "common_steps.js",
+    "locatorFiles": {
+      "default": "resources/locators.json"
+    },
+    "testDataFiles": ["fixtures/users.json"],
+    "scenarioOpener": "Given user is on web app",
+    "dryRunCommand": "npx cucumber-js",
+    "tags": ["@recorded", "@wip"],
+    "notes": "Reuse steps from the primary step file before authoring new ones. Selectors live in the locator JSON, never inline in step code. Every scenario needs a suite tag."
+  }
+}

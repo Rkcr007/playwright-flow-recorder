@@ -1,0 +1,13 @@
+node_modules/
+package-lock.json
+
+# Recorder working directory: session recordings, queues, acks, reuse index.
+# Recordings may contain application data — commit one only as a deliberate example.
+.flow-recorder/
+
+# Per-user config override (ports, userMode, profile paths) — never committed.
+flow-recorder.config.local.json
+.flow-recorder.local.json
+
+.DS_Store
+*.log

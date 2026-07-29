@@ -1,0 +1,59 @@
+{
+  "name": "playwright-flow-recorder",
+  "version": "1.0.0",
+  "description": "Record a browser walkthrough as a semantic event stream (JSONL) — multiple candidate selectors, recorded assertions, and intent notes — then let an AI agent convert it into tests that reuse your existing step library.",
+  "keywords": [
+    "playwright",
+    "test-automation",
+    "recorder",
+    "codegen",
+    "cucumber",
+    "gherkin",
+    "e2e",
+    "qa",
+    "ai",
+    "claude",
+    "selectors",
+    "cdp"
+  ],
+  "license": "MIT",
+  "author": "Rakesh Barik",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Rkcr007/playwright-flow-recorder.git"
+  },
+  "homepage": "https://github.com/Rkcr007/playwright-flow-recorder#readme",
+  "bugs": {
+    "url": "https://github.com/Rkcr007/playwright-flow-recorder/issues"
+  },
+  "bin": {
+    "playwright-flow-recorder": "bin/cli.js",
+    "flow-recorder": "bin/cli.js"
+  },
+  "main": "src/config.js",
+  "files": [
+    "bin/",
+    "src/",
+    "skills/",
+    "docs/",
+    "flow-recorder.config.example.json",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node test/config-test.js && node test/smoke-test.js && node test/focus-trap-test.js",
+    "test:config": "node test/config-test.js",
+    "test:smoke": "node test/smoke-test.js",
+    "test:trap": "node test/focus-trap-test.js",
+    "doctor": "node bin/cli.js doctor"
+  },
+  "dependencies": {
+    "playwright-core": ">=1.40.0"
+  },
+  "devDependencies": {
+    "playwright": ">=1.40.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
