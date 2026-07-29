@@ -114,6 +114,16 @@ Every ⚡ appends the stopped-but-not-yet-queued segment(s). Because it's a file
 
 **DRAIN LOOP (mandatory — never leave the user blind after ⚡).** The moment you register a `create-scenario` (watcher wake OR the user saying they clicked ⚡):
 
+0. **Say so in chat, immediately, before any analysis.** One or two lines, named and specific:
+
+   > Got your ⚡ — picked up **2 scenarios** (`approve first pending order`, `reject with reason`). Starting on the first now: reading the segment and matching it against the step index.
+
+   This is not optional and it is not the ack file. The user is sitting in the chat window with no idea whether their click reached anything — the widget only ever says "queued", and a silent agent is indistinguishable from a broken one. **Acknowledge before you read the segment, before the reconciliation, before any tool call that takes time.** If you notice you have been working silently for more than a couple of steps, say where you are right now rather than waiting to present a finished result.
+
+   Then keep it alive as you go: one short line per scenario as you move ("`approve first pending order` → matched 4 existing steps, 1 new; dry-running now"), and one line when each lands. Long silences are the failure this rule exists to prevent — **especially** when a step is slow, because that is exactly when the user starts wondering if it worked.
+
+   If you discover the click arrived late (a watcher that died, a wake you missed), say that plainly and note the queue held it — never let the user think their click was lost, and never let them think it was instant when it wasn't.
+
 1. Read `<jsonl-path>.queue.json`. Process `status:"queued"` items **in order, one at a time**.
 2. Before touching an item, write the ack sidecar `<jsonl-path>.ack` marking it `working`, so the widget flips from "waiting…" to live status:
    ```json
@@ -127,7 +137,9 @@ Every ⚡ appends the stopped-but-not-yet-queued segment(s). Because it's a file
 
 **Two ways you arrive at a drain.** Either you were already watching (the watcher above), or the project set `onCreate` in its config and the ⚡ click **spawned you** — in which case `FLOW_QUEUE_FILE`, `FLOW_SESSION_FILE`, `FLOW_ACK_FILE`, `FLOW_SCENARIOS` and `FLOW_PROJECT_ROOT` are already in your environment and there was no live session to follow. Prefer those env vars over re-deriving paths from `latest.txt` when they are set, and go straight to the drain loop: nobody is reading chat, so the ack file is your only channel. Only one hook runs at a time, so anything queued while you worked is waiting for *this* run — re-read the queue before you finish.
 
-Writing the first `working` ack is the FIRST thing you do on wake — before debriefing — because it's the user's only signal you received the request. In queue mode the user has usually moved on, so favour best-effort inference from notes/asserts/provenance, leave `TODO(data):` comments where a decision is uncertain, and surface one consolidated data debrief after the drain rather than blocking per item (everything is `@wip` and human-reviewed anyway).
+**Two channels, both required, different audiences.** The chat line (step 0) is for the person watching the conversation; the `.ack` file is for the person watching the browser HUD. Neither substitutes for the other — someone mid-recording never reads chat, and someone who has switched to their editor never sees the widget. When the ⚡ *spawned* you via `onCreate` there is no chat to write to, so the ack file carries everything.
+
+Writing the first `working` ack is the FIRST file you touch on wake — before debriefing — because it's the HUD's only signal you received the request. In queue mode the user has usually moved on, so favour best-effort inference from notes/asserts/provenance, leave `TODO(data):` comments where a decision is uncertain, and surface one consolidated data debrief after the drain rather than blocking per item (everything is `@wip` and human-reviewed anyway).
 
 ## Phase 2 — Follow along (live mode)
 

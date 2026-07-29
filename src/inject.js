@@ -342,7 +342,13 @@
       (t) => r.addEventListener(t, (e) => e.stopPropagation())
     );
     const st = d.state || {};
-    const rows = [mk('div', { class: 'hd', id: 'p_hd' }), mk('input', { id: 'p_exp' })];
+    // The expected-text field sits directly above the button that consumes it, and
+    // with everything sharing one dark surface it read as a fifth choice rather than
+    // an editable value. A placeholder plus the inset field styling separates them.
+    const rows = [
+      mk('div', { class: 'hd', id: 'p_hd' }),
+      mk('input', { id: 'p_exp', placeholder: 'expected text', 'aria-label': 'expected text', autocomplete: 'off', spellcheck: 'false' }),
+    ];
     if (d.text) rows.push(mk('button', { id: 'p_text', text: 'has this text' }));
     rows.push(mk('button', { id: 'p_vis', text: 'is visible' }));
     rows.push(mk('button', { id: 'p_en', text: st.enabled === false ? 'is disabled' : 'is enabled' }));
@@ -350,14 +356,35 @@
     if ('checked' in st) rows.push(mk('button', { id: 'p_chk', text: st.checked ? 'is checked' : 'is unchecked' }));
     if (d.row) rows.push(mk('button', { id: 'p_row', text: 'check this row' }));
     rows.push(mk('button', { id: 'p_gone', text: 'disappears later' }));
+    // Same visual language as the bar — this palette is the other half of the HUD.
     r.appendChild(
       styleTag(
-        '.pal{display:flex;flex-direction:column;gap:4px;background:rgba(17,17,17,.95);border:1px solid #555;' +
-          'border-radius:8px;padding:8px;font:12px -apple-system,sans-serif;min-width:190px}' +
-          '.hd{color:#aaa;font-size:11px;padding-bottom:2px;max-width:230px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}' +
-          'button{background:#222;color:#fff;border:1px solid #555;border-radius:6px;padding:5px 8px;cursor:pointer;text-align:left}' +
-          'button:hover{background:#333}' +
-          'input{background:#222;color:#fff;border:1px solid #666;border-radius:6px;padding:4px 8px;font:12px -apple-system,sans-serif}'
+        '.pal{display:flex;flex-direction:column;gap:5px;min-width:196px;padding:8px;border-radius:12px;' +
+          'color-scheme:dark;color:#e8eaed;' +
+          "font:500 12px/1.35 -apple-system,BlinkMacSystemFont,'Segoe UI',Inter,Roboto,'Helvetica Neue',sans-serif;" +
+          'background:linear-gradient(180deg,rgba(28,31,38,.95),rgba(17,19,24,.97));' +
+          'border:1px solid rgba(255,255,255,.14);' +
+          '-webkit-backdrop-filter:blur(14px) saturate(140%);backdrop-filter:blur(14px) saturate(140%);' +
+          'box-shadow:0 12px 34px rgba(0,0,0,.46),inset 0 1px 0 rgba(255,255,255,.07);' +
+          'animation:flowpalin 120ms ease-out}' +
+          '.hd{color:rgba(232,234,237,.55);font-size:10px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;' +
+          'padding:1px 2px 3px;max-width:230px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}' +
+          'button{appearance:none;font:inherit;text-align:left;color:#e8eaed;cursor:pointer;' +
+          'background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);border-radius:8px;padding:6px 9px;' +
+          'transition:background 120ms ease,border-color 120ms ease,transform 60ms ease}' +
+          'button:hover{background:rgba(255,255,255,.13);border-color:rgba(255,255,255,.22)}' +
+          'button:active{transform:translateY(.5px)}' +
+          'button:focus-visible{outline:2px solid #60a5fa;outline-offset:2px}' +
+          // Recessed, not raised: a field must not look like the buttons under it.
+          'input{font:inherit;font-weight:400;color:#f3f4f6;background:rgba(0,0,0,.42);' +
+          'border:1px solid rgba(255,255,255,.16);border-radius:8px;padding:6px 9px;margin-bottom:2px;' +
+          'box-shadow:inset 0 1px 3px rgba(0,0,0,.5);' +
+          'transition:border-color 120ms ease,box-shadow 120ms ease}' +
+          'input::placeholder{color:rgba(232,234,237,.42)}' +
+          'input:focus{outline:none;border-color:#60a5fa;' +
+          'box-shadow:inset 0 1px 3px rgba(0,0,0,.5),0 0 0 3px rgba(96,165,250,.22)}' +
+          '@keyframes flowpalin{from{opacity:0;transform:scale(.97)}to{opacity:1;transform:none}}' +
+          '@media (prefers-reduced-motion:reduce){.pal{animation:none}button,input{transition:none}}'
       )
     );
     r.appendChild(mk('div', { class: 'pal' }, rows));
@@ -568,35 +595,89 @@
     );
     // No native prompt()/alert() here: Playwright auto-dismisses native dialogs
     // on attached pages, so the widget uses an inline input instead.
+    // Presentation only. The ids, the `.bar` class, the exact button labels and the
+    // `className` swaps in setRecUI/syncState are load-bearing (tests drive them and
+    // setRecUI overwrites className wholesale, so state is styled by id + .on/.live,
+    // never by adding a second static class).
+    //
+    // `:has()` lets the whole bar react to the record button's state without any JS
+    // touching it — this runs only in Chrome via CDP, so :has() is always available.
     root.appendChild(
       styleTag(
-        '.bar{display:flex;gap:6px;font:12px -apple-system,BlinkMacSystemFont,sans-serif;align-items:center;' +
-          'background:rgba(17,17,17,.92);border:1px solid #444;border-radius:8px;padding:4px 8px;pointer-events:auto}' +
-          'button{background:#111;color:#fff;border:1px solid #555;border-radius:6px;padding:6px 10px;cursor:pointer;opacity:.85}' +
-          'button:hover{opacity:1}.on{background:#b91c1c;border-color:#b91c1c}' +
-          'input{width:160px;background:#222;color:#fff;border:1px solid #666;border-radius:6px;padding:5px 8px;font:12px -apple-system,sans-serif}' +
-          '#grip{cursor:move;color:#888;user-select:none;padding:0 2px;font-size:14px}' +
-          '#dot{width:10px;height:10px;border-radius:50%;background:#ef4444;flex:none}' +
-          '#dot.live{background:#22c55e;animation:pulse 1.2s infinite}' +
-          'button:disabled{opacity:.35;cursor:default}' +
-          '#qs{color:#bbb;font-size:11px;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}' +
-          '@keyframes pulse{50%{opacity:.35}}'
+        '.bar{display:flex;gap:8px;align-items:center;pointer-events:auto;color-scheme:dark;' +
+          "font:500 12px/1.35 -apple-system,BlinkMacSystemFont,'Segoe UI',Inter,Roboto,'Helvetica Neue',sans-serif;" +
+          'color:#e8eaed;padding:6px 8px;border-radius:12px;' +
+          'background:linear-gradient(180deg,rgba(28,31,38,.93),rgba(17,19,24,.95));' +
+          'border:1px solid rgba(255,255,255,.14);' +
+          '-webkit-backdrop-filter:blur(14px) saturate(140%);backdrop-filter:blur(14px) saturate(140%);' +
+          'box-shadow:0 10px 30px rgba(0,0,0,.4),0 1px 2px rgba(0,0,0,.3),inset 0 1px 0 rgba(255,255,255,.07);' +
+          'animation:flowrecin 160ms ease-out}' +
+          // Recording is the one state worth seeing from across the room.
+          '.bar:has(#rec.on){border-color:rgba(239,68,68,.45);' +
+          'box-shadow:0 10px 30px rgba(0,0,0,.4),0 0 0 1px rgba(239,68,68,.3),inset 0 1px 0 rgba(255,255,255,.07)}' +
+          'button{appearance:none;font:inherit;white-space:nowrap;color:#e8eaed;cursor:pointer;' +
+          'background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);border-radius:8px;padding:6px 10px;' +
+          'transition:background 120ms ease,border-color 120ms ease,box-shadow 120ms ease,transform 60ms ease}' +
+          'button:hover{background:rgba(255,255,255,.12);border-color:rgba(255,255,255,.22)}' +
+          'button:active{transform:translateY(.5px)}' +
+          'button:focus-visible{outline:2px solid #60a5fa;outline-offset:2px}' +
+          'button:disabled{opacity:.32;cursor:default;background:rgba(255,255,255,.04);' +
+          'border-color:rgba(255,255,255,.1);box-shadow:none;transform:none}' +
+          // ⏺ is the primary action; it turns unmistakably red while capturing.
+          '#rec{font-weight:600;background:rgba(255,255,255,.1)}' +
+          '#rec:hover{background:rgba(255,255,255,.17)}' +
+          '#rec.on{color:#fff;border-color:#f87171;background:linear-gradient(180deg,#ef4444,#dc2626);' +
+          'box-shadow:0 0 0 1px rgba(239,68,68,.45),0 2px 12px rgba(239,68,68,.4)}' +
+          '#rec.on:hover{background:linear-gradient(180deg,#f15b5b,#e02424)}' +
+          // ⚡ only becomes a call to action once there is something to hand off.
+          '#gen:not(:disabled){font-weight:600;color:#fff;border-color:rgba(129,140,248,.65);' +
+          'background:linear-gradient(180deg,rgba(99,102,241,.92),rgba(79,70,229,.92));' +
+          'box-shadow:0 2px 12px rgba(79,70,229,.32)}' +
+          '#gen:not(:disabled):hover{background:linear-gradient(180deg,#6366f1,#4f46e5);' +
+          'border-color:rgba(165,180,252,.8)}' +
+          'input{width:172px;min-width:0;font:inherit;font-weight:400;color:#f3f4f6;' +
+          'background:rgba(0,0,0,.35);border:1px solid rgba(255,255,255,.14);border-radius:8px;padding:6px 9px;' +
+          'transition:border-color 120ms ease,box-shadow 120ms ease,background 120ms ease}' +
+          'input::placeholder{color:rgba(232,234,237,.42)}' +
+          'input:focus{outline:none;border-color:#60a5fa;background:rgba(0,0,0,.5);' +
+          'box-shadow:0 0 0 3px rgba(96,165,250,.22)}' +
+          '#grip{cursor:grab;color:rgba(232,234,237,.4);user-select:none;font-size:13px;line-height:1;' +
+          'padding:3px;border-radius:5px;transition:color 120ms ease,background 120ms ease}' +
+          '#grip:hover{color:rgba(232,234,237,.85);background:rgba(255,255,255,.08)}' +
+          '#grip:active{cursor:grabbing}' +
+          // Idle is neutral grey and recording is red — a red dot on an idle HUD reads
+          // as "you are being recorded", which is the opposite of the truth.
+          '#dot{width:9px;height:9px;border-radius:50%;flex:none;background:#6b7280;' +
+          'box-shadow:inset 0 0 0 1px rgba(255,255,255,.2)}' +
+          '#dot.live{background:#ef4444;box-shadow:0 0 0 3px rgba(239,68,68,.22),0 0 10px rgba(239,68,68,.55);' +
+          'animation:flowrecpulse 1.4s ease-in-out infinite}' +
+          '#qs{color:#cbd5e1;font-size:11px;font-variant-numeric:tabular-nums;' +
+          'max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}' +
+          // Only becomes a chip when it has something to say, so an empty HUD stays clean.
+          '#qs:not(:empty){padding:3px 8px;border-radius:999px;background:rgba(255,255,255,.07);' +
+          'border:1px solid rgba(255,255,255,.1)}' +
+          '@keyframes flowrecpulse{50%{opacity:.5;box-shadow:0 0 0 5px rgba(239,68,68,.1),0 0 10px rgba(239,68,68,.3)}}' +
+          '@keyframes flowrecin{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}' +
+          '@media (prefers-reduced-motion:reduce){#dot.live{animation:none}' +
+          '.bar{animation:none}button,input,#grip{transition:none}}'
       )
     );
     root.appendChild(
-      mk('div', { class: 'bar' }, [
-        mk('span', { id: 'grip', text: '⠿' }),
-        mk('span', { id: 'dot' }),
-        mk('input', { id: 'inp', placeholder: 'scenario name' }),
-        mk('button', { id: 'rec', text: '⏺ record' }),
-        mk('button', { id: 'note', text: '✎ note' }),
+      // Labels and roles only — the button text is exactly what the tests assert and
+      // what setRecUI rewrites, so it stays byte-identical.
+      mk('div', { class: 'bar', role: 'toolbar', 'aria-label': 'flow-recorder' }, [
+        mk('span', { id: 'grip', text: '⠿', title: 'drag the recorder out of the way', 'aria-hidden': 'true' }),
+        mk('span', { id: 'dot', role: 'img', 'aria-label': 'recorder status' }),
+        mk('input', { id: 'inp', placeholder: 'scenario name', 'aria-label': 'scenario name', autocomplete: 'off', spellcheck: 'false' }),
+        mk('button', { id: 'rec', title: 'start / stop a scenario segment', text: '⏺ record' }),
+        mk('button', { id: 'note', title: 'note your intent, or an assertion, in plain words', text: '✎ note' }),
         mk('button', {
           id: 'gen',
           disabled: '',
           title: 'queue this scenario for ' + AGENT + ' to create',
           text: '⚡ create',
         }),
-        mk('span', { id: 'qs' }),
+        mk('span', { id: 'qs', role: 'status', 'aria-live': 'polite' }),
       ])
     );
     const rec = root.getElementById('rec');
