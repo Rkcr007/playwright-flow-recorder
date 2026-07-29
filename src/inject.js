@@ -38,6 +38,31 @@
   const esc = (s) => String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
   const attr = (el, n) => (el && el.getAttribute ? el.getAttribute(n) : null);
 
+  // --- DOM building WITHOUT innerHTML ---
+  // Any page that enforces Trusted Types — Chrome's own chrome:// pages, and any
+  // app served with `require-trusted-types-for 'script'` — throws a TypeError on
+  // innerHTML assignment. That used to abort widget construction on the very first
+  // line, BEFORE the host was appended, so the recorder attached and captured
+  // events fine but no HUD ever appeared and nothing said why. A named
+  // trustedTypes policy is not a fix: strict allow-lists reject it too
+  // ("Policy 'flowRecorder' disallowed"). createElement/textContent are never
+  // gated by Trusted Types, so build every node the long way.
+  const mk = (tag, props, children) => {
+    const n = document.createElement(tag);
+    for (const [k, v] of Object.entries(props || {})) {
+      if (v == null) continue;
+      if (k === 'text') n.textContent = v;
+      else n.setAttribute(k, v);
+    }
+    for (const c of children || []) if (c) n.appendChild(c);
+    return n;
+  };
+  const styleTag = (css) => {
+    const s = document.createElement('style');
+    s.textContent = css;
+    return s;
+  };
+
   const visibleText = (el) => {
     const t = ((el.innerText != null ? el.innerText : el.textContent) || '')
       .replace(/\s+/g, ' ')
@@ -279,25 +304,25 @@
       (t) => r.addEventListener(t, (e) => e.stopPropagation())
     );
     const st = d.state || {};
-    const btns = [];
-    btns.push('<input id="p_exp">');
-    if (d.text) btns.push('<button id="p_text">has this text</button>');
-    btns.push('<button id="p_vis">is visible</button>');
-    btns.push('<button id="p_en">' + (st.enabled === false ? 'is disabled' : 'is enabled') + '</button>');
-    if ('editable' in st) btns.push('<button id="p_edit">' + (st.editable ? 'is editable' : 'is read-only') + '</button>');
-    if ('checked' in st) btns.push('<button id="p_chk">' + (st.checked ? 'is checked' : 'is unchecked') + '</button>');
-    if (d.row) btns.push('<button id="p_row">check this row</button>');
-    btns.push('<button id="p_gone">disappears later</button>');
-    r.innerHTML =
-      '<style>' +
-      '.pal{display:flex;flex-direction:column;gap:4px;background:rgba(17,17,17,.95);border:1px solid #555;' +
-      'border-radius:8px;padding:8px;font:12px -apple-system,sans-serif;min-width:190px}' +
-      '.hd{color:#aaa;font-size:11px;padding-bottom:2px;max-width:230px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}' +
-      'button{background:#222;color:#fff;border:1px solid #555;border-radius:6px;padding:5px 8px;cursor:pointer;text-align:left}' +
-      'button:hover{background:#333}' +
-      'input{background:#222;color:#fff;border:1px solid #666;border-radius:6px;padding:4px 8px;font:12px -apple-system,sans-serif}' +
-      '</style>' +
-      '<div class="pal"><div class="hd" id="p_hd"></div>' + btns.join('') + '</div>';
+    const rows = [mk('div', { class: 'hd', id: 'p_hd' }), mk('input', { id: 'p_exp' })];
+    if (d.text) rows.push(mk('button', { id: 'p_text', text: 'has this text' }));
+    rows.push(mk('button', { id: 'p_vis', text: 'is visible' }));
+    rows.push(mk('button', { id: 'p_en', text: st.enabled === false ? 'is disabled' : 'is enabled' }));
+    if ('editable' in st) rows.push(mk('button', { id: 'p_edit', text: st.editable ? 'is editable' : 'is read-only' }));
+    if ('checked' in st) rows.push(mk('button', { id: 'p_chk', text: st.checked ? 'is checked' : 'is unchecked' }));
+    if (d.row) rows.push(mk('button', { id: 'p_row', text: 'check this row' }));
+    rows.push(mk('button', { id: 'p_gone', text: 'disappears later' }));
+    r.appendChild(
+      styleTag(
+        '.pal{display:flex;flex-direction:column;gap:4px;background:rgba(17,17,17,.95);border:1px solid #555;' +
+          'border-radius:8px;padding:8px;font:12px -apple-system,sans-serif;min-width:190px}' +
+          '.hd{color:#aaa;font-size:11px;padding-bottom:2px;max-width:230px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}' +
+          'button{background:#222;color:#fff;border:1px solid #555;border-radius:6px;padding:5px 8px;cursor:pointer;text-align:left}' +
+          'button:hover{background:#333}' +
+          'input{background:#222;color:#fff;border:1px solid #666;border-radius:6px;padding:4px 8px;font:12px -apple-system,sans-serif}'
+      )
+    );
+    r.appendChild(mk('div', { class: 'pal' }, rows));
     r.getElementById('p_hd').textContent = 'assert: ' + (d.text || d.label || d.tag);
     const exp = r.getElementById('p_exp');
     exp.value = (d.text || '').slice(0, 60);
@@ -438,24 +463,37 @@
     );
     // No native prompt()/alert() here: Playwright auto-dismisses native dialogs
     // on attached pages, so the widget uses an inline input instead.
-    root.innerHTML =
-      '<style>' +
-      '.bar{display:flex;gap:6px;font:12px -apple-system,BlinkMacSystemFont,sans-serif;align-items:center;' +
-      'background:rgba(17,17,17,.92);border:1px solid #444;border-radius:8px;padding:4px 8px;pointer-events:auto}' +
-      'button{background:#111;color:#fff;border:1px solid #555;border-radius:6px;padding:6px 10px;cursor:pointer;opacity:.85}' +
-      'button:hover{opacity:1}.on{background:#b91c1c;border-color:#b91c1c}' +
-      'input{width:160px;background:#222;color:#fff;border:1px solid #666;border-radius:6px;padding:5px 8px;font:12px -apple-system,sans-serif}' +
-      '#grip{cursor:move;color:#888;user-select:none;padding:0 2px;font-size:14px}' +
-      '#dot{width:10px;height:10px;border-radius:50%;background:#ef4444;flex:none}' +
-      '#dot.live{background:#22c55e;animation:pulse 1.2s infinite}' +
-      'button:disabled{opacity:.35;cursor:default}' +
-      '#qs{color:#bbb;font-size:11px;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}' +
-      '@keyframes pulse{50%{opacity:.35}}' +
-      '</style>' +
-      '<div class="bar"><span id="grip">⠿</span><span id="dot"></span><input id="inp" placeholder="scenario name">' +
-      '<button id="rec">⏺ record</button><button id="note">✎ note</button>' +
-      '<button id="gen" disabled title="queue this scenario for ' + AGENT + ' to create">⚡ create</button>' +
-      '<span id="qs"></span></div>';
+    root.appendChild(
+      styleTag(
+        '.bar{display:flex;gap:6px;font:12px -apple-system,BlinkMacSystemFont,sans-serif;align-items:center;' +
+          'background:rgba(17,17,17,.92);border:1px solid #444;border-radius:8px;padding:4px 8px;pointer-events:auto}' +
+          'button{background:#111;color:#fff;border:1px solid #555;border-radius:6px;padding:6px 10px;cursor:pointer;opacity:.85}' +
+          'button:hover{opacity:1}.on{background:#b91c1c;border-color:#b91c1c}' +
+          'input{width:160px;background:#222;color:#fff;border:1px solid #666;border-radius:6px;padding:5px 8px;font:12px -apple-system,sans-serif}' +
+          '#grip{cursor:move;color:#888;user-select:none;padding:0 2px;font-size:14px}' +
+          '#dot{width:10px;height:10px;border-radius:50%;background:#ef4444;flex:none}' +
+          '#dot.live{background:#22c55e;animation:pulse 1.2s infinite}' +
+          'button:disabled{opacity:.35;cursor:default}' +
+          '#qs{color:#bbb;font-size:11px;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}' +
+          '@keyframes pulse{50%{opacity:.35}}'
+      )
+    );
+    root.appendChild(
+      mk('div', { class: 'bar' }, [
+        mk('span', { id: 'grip', text: '⠿' }),
+        mk('span', { id: 'dot' }),
+        mk('input', { id: 'inp', placeholder: 'scenario name' }),
+        mk('button', { id: 'rec', text: '⏺ record' }),
+        mk('button', { id: 'note', text: '✎ note' }),
+        mk('button', {
+          id: 'gen',
+          disabled: '',
+          title: 'queue this scenario for ' + AGENT + ' to create',
+          text: '⚡ create',
+        }),
+        mk('span', { id: 'qs' }),
+      ])
+    );
     const rec = root.getElementById('rec');
     const noteBtn = root.getElementById('note');
     const genBtn = root.getElementById('gen');
@@ -570,9 +608,26 @@
     inp.addEventListener('input', (e) => e.stopPropagation());
     document.documentElement.appendChild(host);
   };
+  // A widget that fails to mount must never be silent: from the user's side "no
+  // HUD" is indistinguishable from "the recorder never attached", and they will
+  // sit there clicking a ⏺ that does not exist. Report it to the Node console.
+  const mountWidget = () => {
+    try {
+      makeWidget();
+      if (!document.getElementById('__flow_rec_host')) {
+        emit({ kind: 'warning', value: 'widget-missing', note: 'widget did not mount on ' + location.href });
+      }
+    } catch (e) {
+      emit({
+        kind: 'warning',
+        value: 'widget-failed',
+        note: String((e && e.message) || e).slice(0, 160) + ' @ ' + location.href,
+      });
+    }
+  };
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', makeWidget);
+    document.addEventListener('DOMContentLoaded', mountWidget);
   } else {
-    makeWidget();
+    mountWidget();
   }
 })()

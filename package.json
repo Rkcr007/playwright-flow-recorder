@@ -41,10 +41,11 @@
     "LICENSE"
   ],
   "scripts": {
-    "test": "node test/config-test.js && node test/smoke-test.js && node test/focus-trap-test.js",
+    "test": "node test/config-test.js && node test/smoke-test.js && node test/focus-trap-test.js && node test/widget-mount-test.js",
     "test:config": "node test/config-test.js",
     "test:smoke": "node test/smoke-test.js",
     "test:trap": "node test/focus-trap-test.js",
+    "test:mount": "node test/widget-mount-test.js",
     "doctor": "node bin/cli.js doctor",
     "prepublishOnly": "npm test",
     "release:patch": "npm version patch && npm publish && git push --follow-tags",

@@ -200,6 +200,15 @@ const record = async (argv = []) => {
               '  ⚡ create — enqueued ' + added + ' (queue depth ' + pending + ', ' + path.basename(queueFile) + ')\n'
             );
           }
+          // A widget that could not mount is exactly what the user is staring at
+          // when they say "I see no HUD" — surface it loudly, and never gate it on
+          // `recording`, since without the widget they cannot start a segment.
+          if (evt.kind === 'warning' && String(evt.value).startsWith('widget-')) {
+            console.log('\n  ⚠ the on-page widget did not appear: ' + (evt.note || evt.value));
+            console.log('    Try a normal app page — browser-internal pages block injection.\n');
+            write({ ...evt, url: page.url() });
+            return;
+          }
           // markers + notes always land; interaction events only while recording
           if (!state.recording && evt.kind !== 'marker' && evt.kind !== 'note') {
             // forgot-⏺ detection: sustained clicking while idle is usually a
@@ -282,8 +291,14 @@ const record = async (argv = []) => {
   if (!context) context = await browser.newContext({ viewport: null });
   for (const c of browser.contexts()) await wireContext(c);
 
+  // A freshly launched browser has ZERO pages, and a context with no page renders
+  // no window at all — so with no startUrl the user got an invisible browser, no
+  // widget, and a session file containing nothing but session-start. Always make
+  // sure one page exists: blank when there is no startUrl, which still carries the
+  // widget and gives an address bar to navigate from (addInitScript re-injects on
+  // every navigation).
+  const page = context.pages()[0] || (await context.newPage());
   if (url) {
-    const page = context.pages()[0] || (await context.newPage());
     await page.goto(url).catch((e) => console.log('Could not open ' + url + ': ' + e.message));
   }
 
