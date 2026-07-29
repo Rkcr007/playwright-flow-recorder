@@ -11,6 +11,8 @@
 // Output: <outDir>/<name>-<timestamp>.jsonl  (+ <outDir>/latest.txt pointer,
 //         plus <file>.queue.json and <file>.ack sidecars for agent hand-off)
 
+const { spawn } = require('child_process');
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { loadConfig, makeFlag, pageConfig } = require('./config');
@@ -103,6 +105,62 @@ const record = async (argv = []) => {
   };
   fs.writeFileSync(path.join(outDir, 'latest.txt'), file + '\n');
 
+  // --- ⚡ hand-off hook ---------------------------------------------------------
+  // Without this, ⚡ only appends to the queue file: durable, but delivered to
+  // nobody unless an agent happens to be watching. `onCreate` closes that gap by
+  // running a command — `claude -p "drain $FLOW_QUEUE_FILE"`, a webhook, a desktop
+  // notification — so the click reaches something whether or not a session is live.
+  //
+  // Deliberate choices, because this is shell execution driven by a config file
+  // that may have arrived with a cloned repo:
+  //   • opt-in — empty `onCreate` spawns nothing, which is the default;
+  //   • announced at startup and on every fire, never silent;
+  //   • disableable with `--no-hooks` without editing the config;
+  //   • context passed as FLOW_* env vars, so no interpolation into a command
+  //     string and nothing to quote or escape;
+  //   • one at a time — a second ⚡ while the hook is still running does NOT spawn
+  //     another agent. The queue is durable and the running one re-reads it.
+  const hooksEnabled = !flag('no-hooks', false);
+  const rawHook = cfg.onCreate;
+  const createHook = hooksEnabled && rawHook && (Array.isArray(rawHook) ? rawHook.length : String(rawHook).trim()) ? rawHook : null;
+  let hookProc = null;
+  const runCreateHook = (queue, added) => {
+    if (!createHook) return;
+    if (hookProc) {
+      console.log('  ⚡ hook already running (pid ' + hookProc.pid + ') — queue is durable, it will pick these up\n');
+      return;
+    }
+    const env = {
+      ...process.env,
+      FLOW_SESSION_FILE: file,
+      FLOW_QUEUE_FILE: queueFile,
+      FLOW_ACK_FILE: ackFile,
+      FLOW_PROJECT_ROOT: loaded.projectRoot,
+      FLOW_QUEUE_DEPTH: String(queue.filter((q) => q.status !== 'done').length),
+      FLOW_ENQUEUED: String(added),
+      FLOW_SCENARIOS: queue.filter((q) => q.status === 'queued').map((q) => q.scenario).join('\n'),
+    };
+    const shown = Array.isArray(createHook) ? createHook.join(' ') : String(createHook);
+    console.log('  ⚡ hook → ' + shown.slice(0, 90));
+    try {
+      hookProc = Array.isArray(createHook)
+        ? spawn(createHook[0], createHook.slice(1), { cwd: loaded.projectRoot, env, stdio: 'inherit' })
+        : spawn(createHook, { cwd: loaded.projectRoot, env, stdio: 'inherit', shell: true });
+    } catch (e) {
+      hookProc = null;
+      console.log('  ⚠ hook could not start: ' + e.message + '\n');
+      return;
+    }
+    hookProc.on('error', (e) => {
+      hookProc = null;
+      console.log('  ⚠ hook failed: ' + e.message + '\n');
+    });
+    hookProc.on('exit', (code) => {
+      hookProc = null;
+      if (code) console.log('  ⚠ hook exited ' + code + ' — the queue still holds the request\n');
+    });
+  };
+
   let seq = 0;
   const write = (evt) => {
     seq += 1;
@@ -148,8 +206,26 @@ const record = async (argv = []) => {
   // The in-page script is injected as ONE expression so the same string works for
   // both addInitScript (future pages) and page.evaluate (already-open pages).
   const rawInject = fs.readFileSync(path.join(__dirname, 'inject.js'), 'utf8').trim().replace(/;\s*$/, '');
+  // Identifies this build of the in-page script. Pages already open when we attach
+  // still carry the previous instance; it compares this hash against its own and
+  // replaces itself when they differ, so a recorder restart genuinely updates the
+  // script instead of being skipped by the install guard.
+  //
+  // The CONFIG is hashed along with the source, not just the source. An instance
+  // carrying a stale config is as wrong as one carrying stale code, and it fails
+  // more quietly: same file, changed onCreate/agentName/maskPattern/typeDebounceMs,
+  // and the open tab keeps answering with the previous run's settings. Hashing the
+  // source (rather than the package version) means editing inject.js is enough.
+  const pageCfg = { ...pageConfig(cfg), createHook: !!createHook };
+  const scriptVersion = crypto
+    .createHash('sha1')
+    .update(rawInject + ' ' + JSON.stringify(pageCfg))
+    .digest('hex')
+    .slice(0, 12);
   const injectSrc =
-    '(function(){window.__flowRecorderConfig=' + JSON.stringify(pageConfig(cfg)) + ';' + rawInject + ';})()';
+    '(function(){window.__flowRecorderConfig=' +
+    JSON.stringify({ ...pageCfg, scriptVersion }) +
+    ';' + rawInject + ';})()';
 
   // Recording is segment-based: idle until the user hits ⏺ in the widget.
   // State lives here (not in the page) so it survives navigations and origin changes.
@@ -197,8 +273,12 @@ const record = async (argv = []) => {
             persistQueue(state.queue);
             const pending = state.queue.filter((q) => q.status !== 'done').length;
             console.log(
-              '  ⚡ create — enqueued ' + added + ' (queue depth ' + pending + ', ' + path.basename(queueFile) + ')\n'
+              '  ⚡ create — enqueued ' + added + ' (queue depth ' + pending + ', ' + path.basename(queueFile) + ')'
             );
+            // Persist first, spawn second: if the hook dies the request is already
+            // on disk, and the command can read the queue the moment it starts.
+            runCreateHook(state.queue, added);
+            if (!createHook) console.log('');
           }
           // A widget that could not mount is exactly what the user is staring at
           // when they say "I see no HUD" — surface it loudly, and never gate it on
@@ -311,6 +391,16 @@ const record = async (argv = []) => {
   console.log('  ✎  note / intent                        ⌥/Alt+Click  assert an element');
   console.log('  ⚡  queue the finished segment(s) for ' + (cfg.agentName || 'the AI agent'));
   console.log('  ⠿  drag the widget out of the way       Ctrl+C  finish the session\n');
+  // Say plainly whether ⚡ will reach anything. Silence here is what made people
+  // assume the click dispatched something when it only wrote a file.
+  if (createHook) {
+    console.log('⚡ on create: ' + (Array.isArray(createHook) ? createHook.join(' ') : createHook));
+    console.log('   (disable for this run with --no-hooks)\n');
+  } else {
+    console.log('⚡ on create: nothing is spawned — the queue file is written and an agent');
+    console.log('   must read it. Set `onCreate` in your config to run a command instead.\n');
+    if (rawHook && !hooksEnabled) console.log('   (an onCreate command IS configured but --no-hooks was passed)\n');
+  }
 
   let stopping = false;
   const stop = async () => {

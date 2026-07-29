@@ -113,6 +113,14 @@ const runDoctor = async (argv = []) => {
     add('info', 'Framework', (loaded.cfg.conventions || {}).framework || 'generic');
     add('info', 'User mode', loaded.cfg.userMode);
 
+    // What ⚡ actually does. Unset is a legitimate setup (an agent watches the
+    // queue file), but it must be stated — assuming ⚡ notifies something when it
+    // does not is the difference between a handed-off scenario and a forgotten one.
+    const hook = loaded.cfg.onCreate;
+    const hookStr = Array.isArray(hook) ? hook.join(' ') : String(hook || '').trim();
+    if (hookStr) add('pass', 'onCreate hook (⚡)', hookStr);
+    else add('info', 'onCreate hook (⚡)', 'not set — ⚡ writes the queue file only; an agent must read it');
+
     // Is the output directory actually writable? Fails on read-only mounts and
     // inside some CI sandboxes, and the error surfaces late and confusingly.
     try {

@@ -59,7 +59,7 @@ from steps that already exist in your framework, and the stream contains only si
 | **⏺ / ⏹** | One click starts a named segment; the same button ends it. One segment = one scenario. |
 | **✎ note** | Free text: *"verify the count increments"*, *"this dropdown is flaky, add a wait"*. Becomes an assertion or a comment. |
 | **⌥/Alt+Click** | Assert an element **without triggering it**. A palette asks *what* to verify: has text / visible / enabled / editable / checked / this row / disappears later. |
-| **⚡ create** | Queue the finished segment(s) for the agent. Durable — clicking it while the agent is busy never loses work. |
+| **⚡ create** | Queue the finished segment(s) for the agent. Durable — clicking it while the agent is busy never loses work. Queuing is not delivery: without an [`onCreate`](#making--actually-reach-an-agent) hook an agent has to come and read the queue. |
 | **⠿** | Drag the widget out of the way. |
 
 The name and note box stays typeable **even while a modal or drawer is open** — the widget escapes
@@ -171,9 +171,47 @@ Discovery walks up from the current directory: `flow-recorder.config.json`, then
 | `captureNetwork` | `true` | record XHR/fetch during segments |
 | `userMode` | `expert` | `guided` = plain-language mode for manual testers |
 | `agentName` | `the AI agent` | shown in the widget |
+| `onCreate` | `''` (nothing spawned) | command run when you click ⚡ — see [below](#making--actually-reach-an-agent) |
 | `conventions` | — | **your framework** — see [docs/INTEGRATION.md](docs/INTEGRATION.md) |
 
 See [flow-recorder.config.example.json](flow-recorder.config.example.json) for a full annotated file.
+
+### Making ⚡ actually reach an agent
+
+By default, ⚡ **writes a file and nothing more**. The request lands in
+`<session>.jsonl.queue.json` and stays there until an agent reads it — which happens
+promptly if a session is tailing the recording, and never if one isn't. That's why the
+widget says *"awaiting pickup"* rather than implying delivery.
+
+`onCreate` closes the gap by running a command on every ⚡:
+
+```json
+{ "onCreate": "claude -p \"Drain the flow-recorder queue at $FLOW_QUEUE_FILE\"" }
+```
+
+A string runs through the shell; an array (`["notify-send", "flow ready"]`) is spawned
+directly with no shell. Context arrives as environment variables, so nothing has to be
+quoted into the command:
+
+| Variable | |
+|---|---|
+| `FLOW_QUEUE_FILE` | the durable queue the agent should drain |
+| `FLOW_SESSION_FILE` | the recording JSONL |
+| `FLOW_ACK_FILE` | where the agent writes per-item status back |
+| `FLOW_PROJECT_ROOT` | resolved project root (also the command's cwd) |
+| `FLOW_QUEUE_DEPTH` | items not yet done |
+| `FLOW_ENQUEUED` | how many this click added |
+| `FLOW_SCENARIOS` | queued scenario names, newline-separated |
+
+Deliberate behaviour worth knowing:
+
+- **Opt-in.** Empty means nothing is ever spawned. This is shell execution driven by a
+  config file that may have arrived with a cloned repo, so it is never on by default,
+  it is printed at startup and on every fire, and `record --no-hooks` disables it
+  without editing the config.
+- **One at a time.** A second ⚡ while the hook is still running does *not* start a
+  second agent — the queue is durable and the running one re-reads it.
+- **Queue first, spawn second.** If the command dies the request is already on disk.
 
 ## Commands
 

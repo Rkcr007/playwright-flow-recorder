@@ -15,6 +15,9 @@
   "userMode": "expert",
   "agentName": "the AI agent",
 
+  "//onCreate": "OPTIONAL. Command run when you click ⚡, so the hand-off reaches an agent instead of waiting for one to read the queue file. Empty (the default) spawns nothing. A string runs through the shell; an array is spawned directly with no shell. Context arrives as env vars — FLOW_QUEUE_FILE, FLOW_SESSION_FILE, FLOW_ACK_FILE, FLOW_PROJECT_ROOT, FLOW_QUEUE_DEPTH, FLOW_ENQUEUED, FLOW_SCENARIOS — so nothing needs quoting into the command. One runs at a time: clicking ⚡ again while it works does not start a second agent. Disable for one run with `record --no-hooks`.",
+  "onCreate": "",
+
   "conventions": {
     "//": "Everything the AI converter needs to know about YOUR project. The recorder itself never reads this block.",
 

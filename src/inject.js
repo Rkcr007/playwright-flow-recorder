@@ -10,10 +10,42 @@
 // Runtime settings arrive as window.__flowRecorderConfig (see src/config.js →
 // pageConfig): { maskPattern, typeDebounceMs, agentName }.
 (() => {
-  if (window.__flowRecorderInstalled) return;
-  window.__flowRecorderInstalled = true;
-
   const CFG = window.__flowRecorderConfig || {};
+
+  // --- install guard (version-aware) ---
+  // The recorder re-injects into pages that are ALREADY OPEN when it attaches
+  // (recorder.js does addInitScript for future pages AND page.evaluate for
+  // existing ones). A plain "already installed → bail" guard turned that second
+  // path into a no-op: restart the recorder after editing this file and every
+  // open tab silently kept running the OLD script until someone reloaded it.
+  // Worse, the stale instance kept emitting through the freshly bound
+  // __flowRecorderEmit, so it looked like it was working.
+  //
+  // scriptVersion is a hash of this file's source AND the config it was injected
+  // with (see recorder.js) — a stale config is as wrong as stale code. Same build →
+  // leave the healthy instance alone, which is the common case since both inject
+  // paths can fire on one page. Different build → tear the old instance down and
+  // install this one. Without the teardown, re-installing would simply double
+  // every listener and emit each event twice.
+  const VERSION = CFG.scriptVersion || 'dev';
+  if (window.__flowRecorderInstalled) {
+    if (window.__flowRecorderInstalled === VERSION) return;
+    try { window.__flowRecorderUninstall && window.__flowRecorderUninstall(); } catch (_) {}
+  }
+  window.__flowRecorderInstalled = VERSION;
+
+  // Everything this instance must undo if a newer build replaces it. `on` wraps
+  // addEventListener so a listener can never be registered without its removal.
+  const teardown = [];
+  const on = (target, type, fn, opts) => {
+    target.addEventListener(type, fn, opts);
+    teardown.push(() => target.removeEventListener(type, fn, opts));
+  };
+  window.__flowRecorderUninstall = () => {
+    for (const undo of teardown.splice(0).reverse()) {
+      try { undo(); } catch (_) { /* one failure must not strand the rest */ }
+    }
+  };
 
   const emit = (evt) => {
     try { window.__flowRecorderEmit(JSON.stringify(evt)); } catch (_) { /* binding not ready */ }
@@ -29,6 +61,9 @@
   }
   const TYPE_DEBOUNCE = Number(CFG.typeDebounceMs) > 0 ? Number(CFG.typeDebounceMs) : 900;
   const AGENT = CFG.agentName || 'the AI agent';
+  // Whether an `onCreate` command is wired up Node-side. Drives the ⚡ readout:
+  // with a hook the click really does start something, without one it only queues.
+  const HAS_HOOK = !!CFG.createHook;
 
   const ACTIONABLE =
     'button,a,[role="button"],[role="link"],[role="menuitem"],[role="menuitemcheckbox"],' +
@@ -265,8 +300,8 @@
   const focusGuard = (e) => {
     if (isWidgetEvent(e) || isWidgetNode(e.relatedTarget)) e.stopImmediatePropagation();
   };
-  document.addEventListener('focusin', focusGuard, true);
-  document.addEventListener('focusout', focusGuard, true);
+  on(document, 'focusin', focusGuard, true);
+  on(document, 'focusout', focusGuard, true);
 
   // --- assert palette: ⌥/Alt+Click captures a TARGET, the palette captures the
   // PREDICATE (visible / enabled / editable / text / checked / row / disappears).
@@ -281,6 +316,9 @@
     palHost = null;
     palPending = null;
   };
+  // An open palette belongs to the instance being replaced — close it rather than
+  // leaving an orphaned overlay with a 12s timer pointed at a dead binding.
+  teardown.push(closePalette);
   const settlePaletteDefault = () => {
     if (!palPending) return closePalette();
     const p = palPending;
@@ -348,13 +386,17 @@
   };
 
   // --- clicks (⌥/Alt+Click = open assert palette WITHOUT triggering the element) ---
-  document.addEventListener(
+  on(
+    document,
     'click',
     (e) => {
       if (isWidgetEvent(e)) return;
       if (palHost) settlePaletteDefault(); // clicking outside the palette settles it
       const el = resolveTarget(e);
       if (!el || el.nodeType !== 1) return;
+      // A click elsewhere ends typing (Search button, Save, another field). Flush
+      // every pending emit so the value survives the submit AND precedes the click.
+      if (pendingTypes.size) flushTypes();
       if (e.altKey) {
         e.preventDefault();
         e.stopPropagation();
@@ -367,8 +409,30 @@
   );
 
   // --- typing (debounced; emits the final value once you pause) ---
-  const timers = new WeakMap();
-  document.addEventListener(
+  // The debounce MUST NOT outlive the thing that ended the typing. Pressing Enter,
+  // clicking away, blurring, or the page unloading all tear down the field — or the
+  // whole document — well inside TYPE_DEBOUNCE, and a timer that fires after that
+  // never emits. The typed value was then lost outright; the only trace left was the
+  // ⏹ snapshot, and only for fields still present on the final page. Anything typed
+  // and submitted mid-flow (a search box, a login form) vanished.
+  //
+  // So a pending emit is a flushable record, and every moment that ends typing
+  // flushes it SYNCHRONOUSLY, before the value can disappear. Flushing also fixes
+  // ordering: the `type` lands before the `click`/`key` that submitted it.
+  const pendingTypes = new Map(); // el -> { timer, fire }
+
+  // Flush one element's pending emit, or every pending emit when called bare.
+  const flushTypes = (el) => {
+    if (el) {
+      const p = pendingTypes.get(el);
+      if (p) p.fire();
+      return;
+    }
+    for (const p of Array.from(pendingTypes.values())) p.fire();
+  };
+
+  on(
+    document,
     'input',
     (e) => {
       if (isWidgetEvent(e)) return;
@@ -376,22 +440,52 @@
       if (!el || el.nodeType !== 1) return;
       if (!('value' in el) && !el.isContentEditable) return;
       if (el.tagName === 'SELECT' || el.type === 'file' || el.type === 'checkbox' || el.type === 'radio') return;
-      clearTimeout(timers.get(el));
-      timers.set(
-        el,
-        setTimeout(() => {
-          const hint = [attr(el, 'type'), attr(el, 'name'), attr(el, 'id'), attr(el, 'placeholder'), accessibleName(el)].join(' ');
-          const masked = attr(el, 'type') === 'password' || MASK.test(hint);
-          const value = el.isContentEditable ? visibleText(el) : el.value;
-          emit({ kind: 'type', value: masked ? '***masked***' : value, ...describe(el) });
-        }, TYPE_DEBOUNCE)
-      );
+      const prev = pendingTypes.get(el);
+      if (prev) clearTimeout(prev.timer);
+      // Idempotent: deletes its own record first, so a flush racing the timer
+      // (or two flush points firing back to back) can never double-emit.
+      const fire = () => {
+        const rec = pendingTypes.get(el);
+        if (!rec) return;
+        clearTimeout(rec.timer);
+        pendingTypes.delete(el);
+        const hint = [attr(el, 'type'), attr(el, 'name'), attr(el, 'id'), attr(el, 'placeholder'), accessibleName(el)].join(' ');
+        const masked = attr(el, 'type') === 'password' || MASK.test(hint);
+        const value = el.isContentEditable ? visibleText(el) : el.value;
+        emit({ kind: 'type', value: masked ? '***masked***' : value, ...describe(el) });
+      };
+      pendingTypes.set(el, { timer: setTimeout(fire, TYPE_DEBOUNCE), fire });
     },
     { capture: true, passive: true }
   );
 
+  // Leaving the field ends the typing — flush before the element can be detached.
+  on(
+    document,
+    'focusout',
+    (e) => {
+      if (isWidgetEvent(e)) return;
+      const el = resolveTarget(e);
+      if (el) flushTypes(el);
+    },
+    { capture: true, passive: true }
+  );
+
+  // Last resort for values still pending when the document goes away (form submit,
+  // full navigation, tab close). Best-effort: the binding may already be torn down.
+  ['beforeunload', 'pagehide'].forEach((t) =>
+    on(window, t, () => flushTypes(), { capture: true })
+  );
+
+  // A replaced instance must not leave debounce timers armed against a dead binding.
+  teardown.push(() => {
+    for (const p of pendingTypes.values()) clearTimeout(p.timer);
+    pendingTypes.clear();
+  });
+
   // --- selects, checkboxes, radios, file uploads ---
-  document.addEventListener(
+  on(
+    document,
     'change',
     (e) => {
       if (isWidgetEvent(e)) return;
@@ -411,7 +505,8 @@
   );
 
   // --- meaningful keys ---
-  document.addEventListener(
+  on(
+    document,
     'keydown',
     (e) => {
       if (isWidgetEvent(e)) return;
@@ -421,6 +516,10 @@
       }
       if (e.key !== 'Enter' && e.key !== 'Escape') return;
       const el = document.activeElement;
+      // Enter usually submits, which navigates away long before the debounce
+      // fires. Flush FIRST so the typed value is emitted, and emitted before
+      // the key that submitted it.
+      flushTypes(el && el.nodeType === 1 ? el : undefined);
       const extra = el && el !== document.body ? describe(el) : {};
       emit({ kind: 'key', value: e.key, ...extra });
     },
@@ -433,7 +532,13 @@
   history.pushState = function (...a) { _push.apply(this, a); nav('pushState'); };
   const _replace = history.replaceState;
   history.replaceState = function (...a) { _replace.apply(this, a); nav('replaceState'); };
-  window.addEventListener('popstate', () => nav('popstate'));
+  on(window, 'popstate', () => nav('popstate'));
+  // These are monkey-patches, not listeners — restore them or a replacing instance
+  // stacks a second patch on top and every route change emits twice.
+  teardown.push(() => {
+    history.pushState = _push;
+    history.replaceState = _replace;
+  });
   nav('load');
 
   // --- floating widget: scenario markers + intent notes ---
@@ -504,11 +609,13 @@
     let segments = 0;
     let noteMode = false;
     let lastRecClick = 0;
-    const setRecUI = (on, name) => {
-      recording = on;
-      rec.textContent = on ? '⏹ stop: ' + String(name || '').slice(0, 16) : '⏺ record';
-      rec.className = on ? 'on' : '';
-      dot.className = on ? 'live' : '';
+    // `live`, not `on` — `on` is the listener-registering helper at the top of this
+    // file, and shadowing it here would break any future call to it from this scope.
+    const setRecUI = (live, name) => {
+      recording = live;
+      rec.textContent = live ? '⏹ stop: ' + String(name || '').slice(0, 16) : '⏺ record';
+      rec.className = live ? 'on' : '';
+      dot.className = live ? 'live' : '';
     };
     // drag by the ⠿ grip to park the widget anywhere it isn't in the way
     let drag = null;
@@ -517,13 +624,13 @@
       drag = { dx: e.clientX - r.left, dy: e.clientY - r.top };
       e.preventDefault();
     });
-    document.addEventListener('mousemove', (e) => {
+    on(document, 'mousemove', (e) => {
       if (!drag) return;
       host.style.left = e.clientX - drag.dx + 'px';
       host.style.top = e.clientY - drag.dy + 'px';
       host.style.transform = 'none';
     });
-    document.addEventListener('mouseup', () => { drag = null; });
+    on(document, 'mouseup', () => { drag = null; });
     // ⚡ create is a QUEUE: each click enqueues the stopped-but-not-yet-queued
     // segment(s) into a durable file Node-side. The agent drains the queue one
     // scenario at a time and writes per-item status back, so the widget can show real
@@ -538,7 +645,13 @@
       const working = by('working')[0];
       const parts = [];
       if (working) parts.push('⏳ ' + String(working.scenario || '').slice(0, 20) + (working.message ? ' (' + String(working.message).slice(0, 24) + ')' : ''));
-      const q = by('queued').length; if (q) parts.push(q + ' queued');
+      const q = by('queued').length;
+      // The steady-state readout has to carry the same honesty as the ⚡ click text,
+      // because the poll overwrites that within a few hundred ms — this line is what
+      // the user actually sits looking at. A queued item with no hook and nothing
+      // working has been dispatched NOWHERE; saying only "1 queued" reads like
+      // progress. With a hook, something really was started, so plain is accurate.
+      if (q) parts.push(q + ' queued' + (!working && !HAS_HOOK ? ' · awaiting pickup' : ''));
       const d = by('done').length; if (d) parts.push('✓ ' + d);
       const er = by('error'); if (er.length) parts.push('⚠ ' + er.length);
       if (!working && !q && d && !er.length) qs.textContent = '✓ all ' + d + ' done';
@@ -559,6 +672,14 @@
     const startPoll = () => { if (!statePoll) statePoll = setInterval(poll, 1500); };
     poll();
     startPoll();
+    // A replaced instance leaves behind an interval polling a dead binding and a
+    // widget the new instance can't mount over (makeWidget bails if the host
+    // exists). Drop both, so the incoming build renders its own HUD.
+    teardown.push(() => {
+      clearInterval(statePoll);
+      statePoll = null;
+      if (host && host.parentNode) host.parentNode.removeChild(host);
+    });
     const exitNoteMode = () => {
       noteMode = false;
       inp.placeholder = 'scenario name';
@@ -592,7 +713,13 @@
       // Enqueue the stopped-but-not-yet-queued segment(s). Disable until the next
       // ⏹ makes a fresh segment available; the poll re-enables + shows queue depth.
       genBtn.disabled = true;
-      qs.textContent = '⚡ queued · waiting for ' + AGENT + '…';
+      // Say what actually happens. With no onCreate hook configured, nothing is
+      // dispatched anywhere — the request is written to a file an agent has to come
+      // and read. "waiting for the agent…" implied a delivery that never occurred,
+      // and left users watching a spinner for something that was never coming.
+      qs.textContent = HAS_HOOK
+        ? '⚡ queued · starting ' + AGENT + '…'
+        : '⚡ queued · ' + AGENT + ' reads this on its next check';
       emit({ kind: 'marker', value: 'create-scenario' });
       poll();
     });
@@ -626,7 +753,7 @@
     }
   };
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', mountWidget);
+    on(document, 'DOMContentLoaded', mountWidget);
   } else {
     mountWidget();
   }

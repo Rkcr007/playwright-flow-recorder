@@ -91,8 +91,14 @@ In guided mode: phrase every question in plain language with zero automation jar
    Grep/read the output file selectively; do not load the whole thing into context. If the flow wanders into another domain mid-session, rebuild with the extra `--steps` entry rather than falling back to an unscoped index.
 5. **Arm a watcher** so you wake without being pinged. Read `<outDir>/latest.txt` for the JSONL path, then:
    ```bash
-   tail -n +1 -F "$FILE" | grep -m1 -E '"value":"(create-scenario|session-end|idle-activity)"'
+   tail -n +1 -F "$FILE" | grep -m1 -E '"value":"(create-scenario|session-end|idle-activity)"'   # FIRST arm only
    ```
+   **Every RE-arm must use `tail -n 0`, not `tail -n +1`.** `-n +1` replays the file from line 1, instantly re-matches the marker you just handled, and `grep -m1` exits on it — the watcher is dead within milliseconds and the user's next ⚡ wakes nobody:
+   ```bash
+   tail -n 0 -F "$FILE" | grep -m1 -E '"value":"(create-scenario|session-end|idle-activity)"'    # every re-arm
+   ```
+   A dead watcher costs a wake, never a request — the queue file still holds it, so drain on the next wake and apologise for the lag rather than telling the user the click was lost.
+
    (`idle-activity` wakes you to warn a user who forgot ⏺ — re-arm afterwards.) `recording-stop` alone means a segment finished but the user may record more; note it, but conversion starts on ⚡, "done" in chat, or session end.
 6. **Tell the user**: session is idle — log in and navigate freely; hit ⏺ where the scenario starts; ✎ / Alt+Click for assertions; ⏹ when done; ⚡ to hand it over.
 
@@ -118,6 +124,8 @@ Every ⚡ appends the stopped-but-not-yet-queued segment(s). Because it's a file
    Keep prior items' final statuses when you rewrite it (you own this file; the recorder only reads it) so the widget shows "✓ 1 · ⏳ …". Statuses: `working` → `done` | `error`; update `message` as you progress.
 3. After finishing an item, **re-read the queue file** — the user may have clicked ⚡ again while you worked; late additions drain in the same loop.
 4. When no `queued`/`working` items remain, **re-arm the watcher** and tell the user.
+
+**Two ways you arrive at a drain.** Either you were already watching (the watcher above), or the project set `onCreate` in its config and the ⚡ click **spawned you** — in which case `FLOW_QUEUE_FILE`, `FLOW_SESSION_FILE`, `FLOW_ACK_FILE`, `FLOW_SCENARIOS` and `FLOW_PROJECT_ROOT` are already in your environment and there was no live session to follow. Prefer those env vars over re-deriving paths from `latest.txt` when they are set, and go straight to the drain loop: nobody is reading chat, so the ack file is your only channel. Only one hook runs at a time, so anything queued while you worked is waiting for *this* run — re-read the queue before you finish.
 
 Writing the first `working` ack is the FIRST thing you do on wake — before debriefing — because it's the user's only signal you received the request. In queue mode the user has usually moved on, so favour best-effort inference from notes/asserts/provenance, leave `TODO(data):` comments where a decision is uncertain, and surface one consolidated data debrief after the drain rather than blocking per item (everything is `@wip` and human-reviewed anyway).
 
