@@ -1,6 +1,6 @@
 {
   "name": "playwright-flow-recorder",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Record a browser walkthrough as a semantic event stream (JSONL) — multiple candidate selectors, recorded assertions, and intent notes — then let an AI agent convert it into tests that reuse your existing step library.",
   "keywords": [
     "playwright",
