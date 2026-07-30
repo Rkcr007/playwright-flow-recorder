@@ -45,6 +45,10 @@ That inversion is the whole design. Every other recorder starts capturing at the
 you get forty events of logging in before the part you care about. Here, login and navigation come
 from steps that already exist in your framework, and the stream contains only signal.
 
+> **[▶ Try the interactive demo](https://rkcr007.github.io/playwright-flow-recorder/demo/)** — press record, click through a
+> fake Orders app, and watch it become a Gherkin scenario that reuses 5 steps you already had. Runs in your
+> browser, nothing to install.
+
 ```
     ⠿  ●  [ approve first order    ]  ⏺ record   ✎ note   ⚡ create    ⏳ 1 queued · ✓ 2
     ▲  ▲   ▲                          ▲          ▲        ▲            ▲

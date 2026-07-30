@@ -1,0 +1,1287 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Interactive demo of playwright-flow-recorder: a browser recorder that stays idle until you press record, captures what you were verifying, and hands it to an AI agent that reuses the steps your repo already has.">
+<meta property="og:title" content="playwright-flow-recorder — record the intent, not the clicks">
+<meta property="og:description" content="Press record, click through a fake Orders app, and watch it become a Gherkin scenario that reuses 5 existing steps and writes only 1 new one.">
+<meta property="og:type" content="website">
+<style>*{box-sizing:border-box}html,body{margin:0;padding:0}</style>
+</head>
+<body>
+<title>playwright-flow-recorder — record the intent, not the clicks</title>
+
+<style>
+  /* ---------- tokens ---------- */
+  :root {
+    --paper: #e9edf4;
+    --surface: #ffffff;
+    --surface-2: #f2f5fa;
+    --line: #d3dae6;
+    --line-soft: #e3e8f1;
+    --text: #131822;
+    --text-dim: #515c70;
+    --text-faint: #7d8798;
+    --accent: #4338ca;
+    --accent-soft: #e8e7fb;
+    --rec: #c81e1e;
+    --ok: #157f3c;
+    --ok-soft: #e2f3e8;
+    --warn: #a35b06;
+    --radius: 10px;
+    --mono: ui-monospace, "SF Mono", SFMono-Regular, "Cascadia Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    /* the HUD is an overlay on someone else's app: dark in every theme, on purpose */
+    --hud-bg-a: rgba(28, 31, 38, .95);
+    --hud-bg-b: rgba(17, 19, 24, .97);
+    --hud-line: rgba(255, 255, 255, .14);
+    --hud-text: #e8eaed;
+    --hud-dim: rgba(232, 234, 237, .55);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #0d1117;
+      --surface: #151a22;
+      --surface-2: #1b212b;
+      --line: #2a323f;
+      --line-soft: #222a35;
+      --text: #e6eaf2;
+      --text-dim: #9aa5b8;
+      --text-faint: #6d7889;
+      --accent: #a5b4fc;
+      --accent-soft: #262a4d;
+      --rec: #f87171;
+      --ok: #6ee7a0;
+      --ok-soft: #12301f;
+      --warn: #fbbf24;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #0d1117;
+    --surface: #151a22;
+    --surface-2: #1b212b;
+    --line: #2a323f;
+    --line-soft: #222a35;
+    --text: #e6eaf2;
+    --text-dim: #9aa5b8;
+    --text-faint: #6d7889;
+    --accent: #a5b4fc;
+    --accent-soft: #262a4d;
+    --rec: #f87171;
+    --ok: #6ee7a0;
+    --ok-soft: #12301f;
+    --warn: #fbbf24;
+  }
+  :root[data-theme="light"] {
+    --paper: #e9edf4;
+    --surface: #ffffff;
+    --surface-2: #f2f5fa;
+    --line: #d3dae6;
+    --line-soft: #e3e8f1;
+    --text: #131822;
+    --text-dim: #515c70;
+    --text-faint: #7d8798;
+    --accent: #4338ca;
+    --accent-soft: #e8e7fb;
+    --rec: #c81e1e;
+    --ok: #157f3c;
+    --ok-soft: #e2f3e8;
+    --warn: #a35b06;
+  }
+
+  /* ---------- base ---------- */
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--text);
+    font: 400 16px/1.65 var(--sans);
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 0 24px 96px; }
+  .narrow { max-width: 660px; }
+
+  h1, h2, h3, .eyebrow, .mono { font-family: var(--mono); }
+  h1 {
+    font-size: clamp(28px, 4.6vw, 52px);
+    line-height: 1.05;
+    letter-spacing: -.035em;
+    font-weight: 600;
+    margin: 0 0 18px;
+    text-wrap: balance;
+  }
+  h2 {
+    font-size: clamp(20px, 2.4vw, 27px);
+    letter-spacing: -.025em;
+    font-weight: 600;
+    margin: 0 0 14px;
+    text-wrap: balance;
+  }
+  h3 {
+    font-size: 15px;
+    letter-spacing: -.01em;
+    font-weight: 600;
+    margin: 0 0 6px;
+  }
+  p { margin: 0 0 16px; }
+  a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+  .eyebrow {
+    font-size: 11px;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+    margin: 0 0 14px;
+    font-weight: 600;
+  }
+  .lede { font-size: clamp(17px, 1.6vw, 19px); color: var(--text-dim); }
+  .fine { font-size: 13.5px; color: var(--text-dim); }
+  code, kbd { font-family: var(--mono); font-size: .92em; }
+  kbd {
+    border: 1px solid var(--line);
+    border-bottom-width: 2px;
+    border-radius: 5px;
+    padding: 1px 5px;
+    background: var(--surface);
+    font-size: 12px;
+  }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+
+  header.top {
+    display: flex; align-items: baseline; justify-content: space-between;
+    gap: 16px; flex-wrap: wrap;
+    padding: 30px 0 56px;
+  }
+  .brand { font-family: var(--mono); font-weight: 600; letter-spacing: -.02em; font-size: 15px; }
+  .brand .dot {
+    display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+    background: var(--rec); margin-right: 8px; vertical-align: 1px;
+  }
+  .top nav { display: flex; gap: 18px; font-family: var(--mono); font-size: 13px; }
+
+  .hero { display: grid; gap: 26px; margin-bottom: 22px; }
+  .hero-copy { max-width: 720px; }
+  .kicker {
+    display: inline-block;
+    font-family: var(--mono); font-size: 12px; letter-spacing: .02em;
+    color: var(--accent);
+    background: var(--accent-soft);
+    border-radius: 999px;
+    padding: 4px 11px;
+    margin-bottom: 20px;
+  }
+
+  /* ---------- the demo ---------- */
+  .stage {
+    display: grid;
+    grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
+    gap: 18px;
+    align-items: start;
+  }
+  @media (max-width: 900px) { .stage { grid-template-columns: minmax(0, 1fr); } }
+
+  .panel {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    overflow: hidden;
+  }
+  .panel-hd {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--line-soft);
+    background: var(--surface-2);
+    font-family: var(--mono); font-size: 11.5px;
+    letter-spacing: .05em; text-transform: uppercase;
+    color: var(--text-faint);
+  }
+  .panel-hd .spacer { margin-left: auto; }
+
+  /* simulated browser */
+  .browser { position: relative; }
+  .chrome-dots { display: flex; gap: 5px; }
+  .chrome-dots i { width: 9px; height: 9px; border-radius: 50%; background: var(--line); display: block; }
+  .urlbar {
+    flex: 1; min-width: 0;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    padding: 3px 10px;
+    font-family: var(--mono); font-size: 11px;
+    color: var(--text-faint);
+    text-transform: none; letter-spacing: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .viewport { position: relative; padding: 58px 20px 22px; min-height: 396px; background: var(--surface); }
+
+  /* the app being recorded */
+  .app-h { font-family: var(--sans); font-size: 19px; font-weight: 700; margin: 0 0 2px; letter-spacing: -.01em; }
+  .app-sub { font-size: 12.5px; color: var(--text-faint); margin: 0 0 16px; }
+  .toolbar { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
+  .toolbar input {
+    font: 400 13px var(--sans);
+    padding: 7px 10px; min-width: 0; width: 178px;
+    border: 1px solid var(--line); border-radius: 8px;
+    background: var(--surface-2); color: var(--text);
+  }
+  .chip {
+    font: 500 12.5px var(--sans);
+    padding: 6px 12px; border-radius: 999px; cursor: pointer;
+    border: 1px solid var(--line); background: var(--surface-2); color: var(--text-dim);
+  }
+  .chip[aria-pressed="true"] { background: var(--text); color: var(--surface); border-color: var(--text); }
+  table.orders { width: 100%; border-collapse: collapse; font-size: 13px; }
+  table.orders th {
+    text-align: left; font: 600 10.5px/1 var(--mono);
+    letter-spacing: .09em; text-transform: uppercase; color: var(--text-faint);
+    padding: 0 8px 8px; border-bottom: 1px solid var(--line-soft);
+  }
+  table.orders td { padding: 10px 8px; border-bottom: 1px solid var(--line-soft); vertical-align: middle; }
+  table.orders tr[hidden] { display: none; }
+  .amount { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  .status {
+    font: 600 10.5px var(--mono); letter-spacing: .06em; text-transform: uppercase;
+    padding: 3px 8px; border-radius: 999px;
+    background: var(--surface-2); color: var(--text-dim); border: 1px solid var(--line);
+  }
+  .status.approved { background: var(--ok-soft); color: var(--ok); border-color: transparent; }
+  .btn-approve {
+    font: 500 12px var(--sans); cursor: pointer;
+    padding: 5px 11px; border-radius: 7px;
+    border: 1px solid var(--line); background: var(--surface); color: var(--text);
+  }
+  .btn-approve:hover { border-color: var(--text-faint); }
+  .btn-approve[disabled] { opacity: .4; cursor: default; }
+
+  /* assert-mode highlight */
+  body.assert-arm .viewport [data-rec] { cursor: crosshair; box-shadow: 0 0 0 2px var(--accent-soft); border-radius: 5px; }
+  body.assert-arm .viewport [data-rec]:hover { box-shadow: 0 0 0 2px var(--accent); }
+
+  /* ---------- HUD (dark in every theme, like the real one) ---------- */
+  .hud {
+    position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
+    z-index: 40; display: flex; flex-direction: column; align-items: stretch;
+    width: max-content; max-width: calc(100% - 24px);
+  }
+  .hud-bar {
+    display: flex; align-items: center; gap: 7px;
+    padding: 5px 7px; border-radius: 12px;
+    font: 500 11.5px/1.35 var(--sans); color: var(--hud-text);
+    background: linear-gradient(180deg, var(--hud-bg-a), var(--hud-bg-b));
+    border: 1px solid var(--hud-line);
+    -webkit-backdrop-filter: blur(14px) saturate(140%);
+    backdrop-filter: blur(14px) saturate(140%);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, .34), inset 0 1px 0 rgba(255, 255, 255, .07);
+  }
+  .hud[data-rec="1"] .hud-bar {
+    border-color: rgba(239, 68, 68, .5);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, .34), 0 0 0 1px rgba(239, 68, 68, .3), inset 0 1px 0 rgba(255, 255, 255, .07);
+  }
+  .hud button {
+    font: inherit; color: var(--hud-text); cursor: pointer; white-space: nowrap;
+    background: rgba(255, 255, 255, .07);
+    border: 1px solid rgba(255, 255, 255, .13);
+    border-radius: 8px; padding: 5px 9px;
+    transition: background .12s ease, border-color .12s ease, transform .06s ease;
+  }
+  .hud button:hover { background: rgba(255, 255, 255, .14); }
+  .hud button:active { transform: translateY(.5px); }
+  .hud button[disabled] { opacity: .32; cursor: default; }
+  .hud .grip { color: rgba(232, 234, 237, .4); user-select: none; padding: 0 2px; font-size: 12px; }
+  .hud .dot {
+    width: 8px; height: 8px; border-radius: 50%; flex: none;
+    background: #6b7280; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .2);
+  }
+  .hud[data-rec="1"] .dot {
+    background: #ef4444;
+    box-shadow: 0 0 0 3px rgba(239, 68, 68, .22), 0 0 10px rgba(239, 68, 68, .55);
+    animation: pulse 1.4s ease-in-out infinite;
+  }
+  @keyframes pulse { 50% { opacity: .5; } }
+  .hud input {
+    font: 400 11.5px var(--sans); width: 132px; min-width: 0;
+    color: #f3f4f6; background: rgba(0, 0, 0, .38);
+    border: 1px solid rgba(255, 255, 255, .15); border-radius: 8px; padding: 5px 8px;
+  }
+  .hud input::placeholder { color: rgba(232, 234, 237, .4); }
+  #hudRec { font-weight: 600; background: rgba(255, 255, 255, .11); }
+  .hud[data-rec="1"] #hudRec {
+    background: linear-gradient(180deg, #ef4444, #dc2626); border-color: #f87171; color: #fff;
+  }
+  #hudGen:not([disabled]) {
+    font-weight: 600; color: #fff; border-color: rgba(129, 140, 248, .65);
+    background: linear-gradient(180deg, rgba(99, 102, 241, .95), rgba(79, 70, 229, .95));
+  }
+  #hudChip {
+    font-size: 10.5px; color: #cbd5e1; font-variant-numeric: tabular-nums;
+    max-width: 190px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer;
+  }
+  #hudChip:not(:empty) {
+    padding: 3px 8px; border-radius: 999px;
+    background: rgba(255, 255, 255, .08); border: 1px solid rgba(255, 255, 255, .11);
+  }
+
+  /* hand-off panel */
+  .hud-panel {
+    margin-top: 7px; padding: 7px; border-radius: 12px; text-align: left;
+    font: 500 11.5px/1.4 var(--sans); color: var(--hud-text);
+    background: linear-gradient(180deg, var(--hud-bg-a), var(--hud-bg-b));
+    border: 1px solid var(--hud-line);
+    -webkit-backdrop-filter: blur(14px) saturate(140%);
+    backdrop-filter: blur(14px) saturate(140%);
+    box-shadow: 0 14px 34px rgba(0, 0, 0, .45), inset 0 1px 0 rgba(255, 255, 255, .07);
+  }
+  .hud-panel .ph {
+    font-size: 9.5px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase;
+    color: var(--hud-dim); padding: 1px 2px 6px;
+  }
+  .hcard {
+    padding: 6px 8px; border-radius: 9px; margin-bottom: 5px;
+    background: rgba(255, 255, 255, .05);
+    border: 1px solid rgba(255, 255, 255, .09);
+    border-left: 3px solid rgba(255, 255, 255, .2);
+  }
+  .hcard:last-child { margin-bottom: 0; }
+  .hcard.working { border-left-color: #6366f1; background: rgba(99, 102, 241, .12); }
+  .hcard.done { border-left-color: #22c55e; }
+  .hcard .row1 { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .hcard b { font-size: 11.5px; font-weight: 600; color: #f3f4f6; }
+  .hpill {
+    flex: none; font: 700 8.5px var(--mono); letter-spacing: .07em; text-transform: uppercase;
+    padding: 2px 6px; border-radius: 999px;
+    background: rgba(255, 255, 255, .1); color: rgba(232, 234, 237, .78);
+  }
+  .hpill.working { background: rgba(99, 102, 241, .3); color: #c7d2fe; }
+  .hpill.done { background: rgba(34, 197, 94, .22); color: #bbf7d0; }
+  .hcard .msg { margin-top: 3px; color: #e2e8f0; }
+  .hcard .det { margin-top: 2px; color: rgba(232, 234, 237, .62); }
+  .hcard .fileline { margin-top: 3px; font-family: var(--mono); font-size: 10px; color: #a5b4fc; }
+
+  /* assert palette */
+  .palette {
+    position: absolute; z-index: 60; width: 186px;
+    display: flex; flex-direction: column; gap: 4px;
+    padding: 7px; border-radius: 12px;
+    font: 500 11.5px var(--sans); color: var(--hud-text);
+    background: linear-gradient(180deg, var(--hud-bg-a), var(--hud-bg-b));
+    border: 1px solid var(--hud-line);
+    box-shadow: 0 12px 30px rgba(0, 0, 0, .5);
+  }
+  .palette .ph {
+    font: 700 9.5px var(--mono); letter-spacing: .08em; text-transform: uppercase;
+    color: var(--hud-dim); padding: 1px 2px 3px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .palette button { text-align: left; }
+  .palette .exp {
+    font: 400 11.5px var(--sans); color: #f3f4f6;
+    background: rgba(0, 0, 0, .45); border: 1px solid rgba(255, 255, 255, .17);
+    border-radius: 8px; padding: 5px 8px; margin-bottom: 2px;
+    box-shadow: inset 0 1px 3px rgba(0, 0, 0, .5);
+  }
+
+  /* ---------- event stream ---------- */
+  .stream { display: flex; flex-direction: column; height: 100%; }
+  .stream-body {
+    font-family: var(--mono); font-size: 11.5px; line-height: 1.5;
+    padding: 10px 12px; overflow-y: auto; overflow-x: hidden;
+    height: 396px; background: var(--surface);
+  }
+  .ev { display: grid; grid-template-columns: 26px 54px minmax(0, 1fr); gap: 8px; padding: 2.5px 0; }
+  .ev .n { color: var(--text-faint); font-variant-numeric: tabular-nums; text-align: right; }
+  .ev .k { font-weight: 600; letter-spacing: .02em; }
+  .ev .v { color: var(--text-dim); overflow-wrap: anywhere; }
+  .ev.k-marker .k { color: var(--rec); }
+  .ev.k-assert .k { color: var(--accent); }
+  .ev.k-note .k { color: var(--warn); }
+  .ev.k-net .k { color: var(--text-faint); }
+  .ev.k-click .k, .ev.k-type .k, .ev.k-key .k { color: var(--text); }
+  .ev .cand { display: block; color: var(--text-faint); font-size: 10.5px; }
+  .stream-empty { color: var(--text-faint); font-family: var(--mono); font-size: 11.5px; }
+  .ghost { color: var(--text-faint); font-style: italic; }
+  .stream-foot {
+    border-top: 1px solid var(--line-soft); background: var(--surface-2);
+    padding: 8px 12px; font-family: var(--mono); font-size: 11px; color: var(--text-faint);
+    display: flex; gap: 12px; flex-wrap: wrap;
+  }
+  .stream-foot b { color: var(--text); font-weight: 600; }
+
+  /* ---------- controls under the stage ---------- */
+  .stage-controls {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    margin: 16px 0 8px;
+  }
+  .cta {
+    font: 600 13.5px var(--sans); cursor: pointer;
+    padding: 9px 16px; border-radius: 9px; border: 1px solid transparent;
+    background: var(--accent); color: var(--paper);
+  }
+  :root[data-theme="dark"] .cta, :root:not([data-theme="light"]) .cta { color: #0d1117; }
+  @media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) .cta { color: #fff; } }
+  :root[data-theme="light"] .cta { color: #fff; }
+  .cta:hover { filter: brightness(1.08); }
+  .cta.ghost-btn { background: transparent; color: var(--text); border-color: var(--line); }
+  .hint { font-size: 12.5px; color: var(--text-faint); }
+
+  /* ---------- output ---------- */
+  pre.out {
+    margin: 0; padding: 16px 18px; overflow-x: auto;
+    font-family: var(--mono); font-size: 12.5px; line-height: 1.75;
+    background: var(--surface); color: var(--text);
+  }
+  pre.out .tag { color: var(--warn); }
+  pre.out .kw { color: var(--accent); font-weight: 600; }
+  pre.out .str { color: var(--ok); }
+  pre.out .mark { color: var(--text-faint); }
+  pre.out .mark.new { color: var(--rec); }
+
+  /* ---------- content blocks ---------- */
+  section { margin-top: 76px; }
+  .grid3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 20px; }
+  .card {
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: 12px; padding: 18px 18px 20px;
+  }
+  .card .num {
+    font-family: var(--mono); font-size: 11px; letter-spacing: .1em;
+    color: var(--text-faint); display: block; margin-bottom: 10px;
+  }
+  .steps { display: grid; gap: 14px; }
+  .step { display: grid; grid-template-columns: 30px minmax(0, 1fr); gap: 14px; align-items: start; }
+  .step .marker {
+    font-family: var(--mono); font-size: 11px; font-weight: 600;
+    color: var(--text-faint); padding-top: 3px; font-variant-numeric: tabular-nums;
+  }
+  pre.cmd {
+    margin: 0; padding: 14px 16px; overflow-x: auto;
+    background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+    font-family: var(--mono); font-size: 12.5px; line-height: 1.9;
+  }
+  pre.cmd .c { color: var(--text-faint); }
+  pre.cmd .p { color: var(--accent); }
+  table.spec { width: 100%; border-collapse: collapse; font-size: 14px; }
+  table.spec th, table.spec td { text-align: left; padding: 9px 12px 9px 0; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
+  table.spec th { font: 600 10.5px var(--mono); letter-spacing: .09em; text-transform: uppercase; color: var(--text-faint); }
+  table.spec td:first-child { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; padding-right: 20px; }
+  .tablewrap { overflow-x: auto; }
+  ul.plain { margin: 0 0 16px; padding-left: 20px; }
+  ul.plain li { margin-bottom: 7px; }
+  .callout {
+    border-left: 3px solid var(--warn);
+    background: var(--surface); border-radius: 0 10px 10px 0;
+    padding: 14px 18px; font-size: 14px; color: var(--text-dim);
+  }
+  .callout b { color: var(--text); }
+  footer {
+    margin-top: 84px; padding-top: 26px; border-top: 1px solid var(--line);
+    font-family: var(--mono); font-size: 12px; color: var(--text-faint);
+    display: flex; gap: 18px; flex-wrap: wrap; justify-content: space-between;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * { animation-duration: .001ms !important; transition-duration: .001ms !important; }
+  }
+</style>
+
+<div class="wrap">
+
+  <header class="top">
+    <div class="brand"><span class="dot"></span>playwright-flow-recorder</div>
+    <nav>
+      <a href="#demo">demo</a>
+      <a href="#start">install</a>
+      <a href="#fit">is it for you</a>
+      <a href="#risk">security</a>
+    </nav>
+  </header>
+
+  <div class="hero">
+    <div class="hero-copy">
+      <span class="kicker">open source · MIT · runs entirely on your machine</span>
+      <h1>Codegen gives you a script.<br>This gives you your team's test.</h1>
+      <p class="lede">
+        A browser recorder that stays <em>idle</em> while you log in and navigate, captures only the flow
+        you actually want automated — along with what you were verifying and why — then hands it to an AI
+        agent that writes the test in your existing style, reusing the steps and selectors you already have.
+      </p>
+    </div>
+  </div>
+
+  <!-- ============ DEMO ============ -->
+  <div id="demo">
+    <div class="stage">
+
+      <!-- simulated browser -->
+      <div class="panel browser">
+        <div class="panel-hd">
+          <span class="chrome-dots"><i></i><i></i><i></i></span>
+          <span class="urlbar" id="urlbar">https://app.example.com/orders?status=all</span>
+        </div>
+        <div class="viewport" id="viewport">
+
+          <!-- the HUD -->
+          <div class="hud" id="hud" data-rec="0">
+            <div class="hud-bar">
+              <span class="grip" aria-hidden="true">⠿</span>
+              <span class="dot" id="hudDot" role="img" aria-label="recorder status"></span>
+              <input id="hudName" placeholder="scenario name" aria-label="scenario name" autocomplete="off">
+              <button id="hudRec">⏺ record</button>
+              <button id="hudNote">✎ note</button>
+              <button id="hudAssert" title="in the real tool this is ⌥/Alt+Click on any element">⌥ assert</button>
+              <button id="hudGen" disabled>⚡ create</button>
+              <span id="hudChip" role="status" aria-live="polite"></span>
+            </div>
+            <div id="hudPanel" hidden></div>
+          </div>
+
+          <!-- the app being recorded -->
+          <h2 class="app-h">Orders</h2>
+          <p class="app-sub">3 orders · billing period July 2026</p>
+
+          <div class="toolbar">
+            <input id="q" placeholder="Search orders" data-rec="searchBox" aria-label="Search orders">
+            <button class="chip" data-rec="filterAll" data-filter="all" aria-pressed="true">All</button>
+            <button class="chip" data-rec="filterPending" data-filter="Pending" aria-pressed="false">Pending</button>
+            <button class="chip" data-rec="filterApproved" data-filter="Approved" aria-pressed="false">Approved</button>
+          </div>
+
+          <table class="orders">
+            <thead>
+              <tr><th>Order</th><th>Customer</th><th>Amount</th><th>Status</th><th></th></tr>
+            </thead>
+            <tbody id="rows">
+              <tr data-status="Pending" data-cust="Acme Ltd">
+                <td class="amount">#1043</td>
+                <td>Acme Ltd</td>
+                <td class="amount">₹42,000</td>
+                <td><span class="status" data-rec="statusCell">Pending</span></td>
+                <td><button class="btn-approve" data-rec="approveBtn">Approve</button></td>
+              </tr>
+              <tr data-status="Pending" data-cust="Northwind">
+                <td class="amount">#1044</td>
+                <td>Northwind</td>
+                <td class="amount">₹17,500</td>
+                <td><span class="status" data-rec="statusCell">Pending</span></td>
+                <td><button class="btn-approve" data-rec="approveBtn">Approve</button></td>
+              </tr>
+              <tr data-status="Approved" data-cust="Globex">
+                <td class="amount">#1045</td>
+                <td>Globex</td>
+                <td class="amount">₹8,200</td>
+                <td><span class="status approved" data-rec="statusCell">Approved</span></td>
+                <td><button class="btn-approve" data-rec="approveBtn" disabled>Approve</button></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- event stream -->
+      <div class="panel stream">
+        <div class="panel-hd">
+          session.jsonl
+          <span class="spacer"></span>
+          <span id="streamState">idle</span>
+        </div>
+        <div class="stream-body" id="stream">
+          <div class="stream-empty" id="streamEmpty">
+            Nothing is captured yet.<br><br>
+            Click around the app on the left — filters, the search box, Approve.
+            Watch this stay empty: that's the point. Login and navigation never
+            reach your test.<br><br>
+            Press <b>⏺ record</b> when you're at the part that matters.
+          </div>
+        </div>
+        <div class="stream-foot">
+          <span>events <b id="cEv">0</b></span>
+          <span>asserts <b id="cAs">0</b></span>
+          <span>notes <b id="cNo">0</b></span>
+          <span>ignored while idle <b id="cIg">0</b></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="stage-controls">
+      <button class="cta" id="playBtn">▶ Play the whole flow</button>
+      <button class="cta ghost-btn" id="resetBtn">Reset</button>
+      <span class="hint" id="hint">Or drive it yourself: ⏺ record → click things → ⌥ assert → ⏹ → ⚡</span>
+    </div>
+
+    <div id="outWrap" hidden>
+      <div class="panel" style="margin-top:20px">
+        <div class="panel-hd">features/orders.feature <span class="spacer"></span><span id="outMeta"></span></div>
+        <pre class="out" id="out"></pre>
+      </div>
+      <p class="fine" style="margin-top:12px">
+        Every line is marked. <span class="mono" style="color:var(--text-faint)">[existing]</span> reuses a step
+        already in your repo; <span class="mono" style="color:var(--rec)">[NEW]</span> is the only thing that
+        needed writing. You approve that diff before anything is created — which is what stops a suite growing a
+        duplicate of every step it already had. It lands tagged <code>@wip</code>, so a human reviews it before CI runs it.
+      </p>
+    </div>
+  </div>
+
+  <!-- ============ WHY ============ -->
+  <section>
+    <p class="eyebrow">Why a recorder that records less</p>
+    <h2 class="narrow">Most recorders start capturing at the first click. You get forty events of logging in before the part you cared about.</h2>
+    <div class="grid3" style="margin-top:28px">
+      <div class="card">
+        <span class="num">THE SEGMENT MODEL</span>
+        <h3>Idle until you say so</h3>
+        <p class="fine" style="margin:0">
+          Log in, navigate, poke around — none of it is captured. Press ⏺ where the scenario actually starts.
+          The login and navigation steps come from your framework, where they already exist and already work.
+        </p>
+      </div>
+      <div class="card">
+        <span class="num">INTENT, NOT JUST CLICKS</span>
+        <h3>It records what you were checking</h3>
+        <p class="fine" style="margin:0">
+          ⌥/Alt+Click any element and a menu asks <em>what</em> to verify — has this text, is visible, is enabled,
+          this whole row, disappears later. Plus free-text notes in your own words. A click-only recording proves nothing.
+        </p>
+      </div>
+      <div class="card">
+        <span class="num">REUSE FIRST</span>
+        <h3>Up to 7 selectors per element</h3>
+        <p class="fine" style="margin:0">
+          Ranked <code>data-testid</code> → <code>id</code> → <code>aria-label</code> → <code>placeholder</code> →
+          text → css-path, so the agent can pick a stable one and match it against selectors you already have —
+          proposing fixes when yours have drifted.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ START ============ -->
+  <section id="start">
+    <p class="eyebrow">From zero</p>
+    <h2 class="narrow">Six commands, and it sits inside your framework</h2>
+    <p class="lede narrow" style="margin-bottom:26px">
+      Steps 1–4 are once per repo. Steps 5–6 are how you start each session.
+    </p>
+    <pre class="cmd"><span class="c"># 1 · add it to the test repo you already have</span>
+npm i -D playwright-flow-recorder
+
+<span class="c"># 2 · wire it to YOUR framework — reads package.json, detects what it can</span>
+npx flow-recorder <span class="p">init</span>
+
+<span class="c"># 3 · confirm every path it guessed actually resolves</span>
+npx flow-recorder <span class="p">doctor</span>
+
+<span class="c"># 4 · index the steps and selectors you already have</span>
+npx flow-recorder <span class="p">index</span>
+
+<span class="c"># 5 · a browser you can log into, that the recorder can attach to</span>
+npx flow-recorder <span class="p">chrome</span>
+
+<span class="c"># 6 · attach — and wait, idle, until you press ⏺</span>
+npx flow-recorder <span class="p">record</span></pre>
+
+    <div class="grid3" style="margin-top:26px">
+      <div class="card">
+        <span class="num">WHAT INIT DETECTS</span>
+        <p class="fine" style="margin:0">
+          Cucumber, Playwright Test, CodeceptJS or Cypress — from your dependencies. Then your feature directory,
+          step directories, primary step file and dry-run command. Anything it can't work out, it prints under
+          <em>"review these before recording"</em> rather than guessing silently.
+        </p>
+      </div>
+      <div class="card">
+        <span class="num">WHAT IT CREATES</span>
+        <p class="fine" style="margin:0">
+          <code>flow-recorder.config.json</code> and the agent's instructions — both committed.
+          Recordings, the reuse index and your personal overrides go in <code>.flow-recorder/</code>, added to
+          your <code>.gitignore</code> automatically. It never edits your existing test files.
+        </p>
+      </div>
+      <div class="card">
+        <span class="num">WHAT YOU NEED</span>
+        <p class="fine" style="margin:0">
+          Node 18+, a Chromium-based browser, and an AI coding agent. That's it — no account, no service,
+          no telemetry. Firefox and Safari aren't supported.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ FIT ============ -->
+  <section id="fit">
+    <p class="eyebrow">Honest fit</p>
+    <h2 class="narrow">Where it earns its keep — and where it won't</h2>
+    <div class="steps narrow" style="margin-top:24px">
+      <div class="step">
+        <span class="marker">✓</span>
+        <div>
+          <h3>A team with a real step library</h3>
+          <p class="fine" style="margin:0">
+            When the work isn't "write a test" but "write a test that matches our conventions and doesn't
+            duplicate what exists." That reconciliation is the whole value.
+          </p>
+        </div>
+      </div>
+      <div class="step">
+        <span class="marker">✓</span>
+        <div>
+          <h3>Manual testers who can demonstrate but not code</h3>
+          <p class="fine" style="margin:0">
+            <code>userMode: "guided"</code> strips the jargon, picks safe defaults, and explains the finished
+            scenario back in plain English so they can check the intent without reading code.
+          </p>
+        </div>
+      </div>
+      <div class="step">
+        <span class="marker">✕</span>
+        <div>
+          <h3>A greenfield repo with nothing to reuse</h3>
+          <p class="fine" style="margin:0">
+            It still works, but every step comes back <span class="mono" style="color:var(--rec)">[NEW]</span> —
+            you're mostly getting selector capture. This is the single biggest predictor of disappointment, and
+            <code>doctor</code> warns you about it up front.
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <div class="callout narrow" style="margin-top:26px">
+      <b>No speed claim.</b> I'm not going to quote you a multiplier I haven't measured. What it removes is
+      concrete: hunting selectors in DevTools, re-writing login and navigation, not knowing a step already
+      exists, guessing waits, and forgetting what you were verifying. What it doesn't remove: deciding whether
+      a value is a fixture or a literal, seeding data so a test can run twice, and the human review
+      that <code>@wip</code> exists to demand. Time five scenarios by hand, then five recorded, and count the
+      duplicate steps avoided — that's your real number.
+    </div>
+  </section>
+
+  <!-- ============ RISK ============ -->
+  <section id="risk">
+    <p class="eyebrow">Security, plainly</p>
+    <h2 class="narrow">What it touches, and the one thing to actually think about</h2>
+    <div class="tablewrap" style="margin-top:22px">
+      <table class="spec">
+        <thead>
+          <tr><th>Checked</th><th>Finding</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Install-time code</td>
+            <td>None. No <code>postinstall</code>, <code>preinstall</code> or <code>prepare</code> script — installing the package executes nothing.</td>
+          </tr>
+          <tr>
+            <td>Outbound network</td>
+            <td>None. The only HTTP call in the codebase is a handshake to <code>127.0.0.1</code> to check the browser is up. No telemetry, no analytics.</td>
+          </tr>
+          <tr>
+            <td>Request bodies</td>
+            <td>Never recorded. Network events carry method, path and status only.</td>
+          </tr>
+          <tr>
+            <td><b>The debug port</b></td>
+            <td><b>This is the real one.</b> Chrome's debug protocol is unauthenticated, so any process running as you can drive that browser — cookies and sessions included. It binds to localhost only and uses a dedicated profile, never your everyday one. Don't run it on a shared machine; quit the browser when you're done.</td>
+          </tr>
+          <tr>
+            <td>Recording contents</td>
+            <td>Full page URLs including query strings, visible text, and values you typed. Password-ish fields are masked by pattern — so extend <code>maskPattern</code> for your app's naming, because a sensitive field that doesn't match the pattern comes through in the clear. Recordings are gitignored by default.</td>
+          </tr>
+          <tr>
+            <td>The <code>onCreate</code> hook</td>
+            <td>Runs a shell command when you click ⚡, so a config file committed to a repo could execute something on your machine. Off by default, printed at startup and on every run, and disableable with <code>--no-hooks</code>. Worth a glance in repos you didn't write.</td>
+          </tr>
+          <tr>
+            <td>Your AI agent</td>
+            <td>The recorder is local. Whatever assistant you hand a recording to may not be — that's the step to consider for a sensitive flow, not the recorder.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ============ LIMITS ============ -->
+  <section>
+    <p class="eyebrow">Known blind spots</p>
+    <h2 class="narrow">Documented, not discovered later</h2>
+    <ul class="plain narrow fine" style="margin-top:20px">
+      <li><b>Cross-origin iframes aren't captured</b> — payment widgets, embedded SSO. The HUD won't appear inside them.</li>
+      <li><b>Hover-only menus and drag-and-drop</b> aren't first-class events. Leave a note describing what happened.</li>
+      <li><b>React <code>&lt;div&gt;</code> data grids</b> with no row semantics can't offer the "check this whole row" assertion. Per-cell asserts, or a shared row key, instead.</li>
+      <li><b>Chrome 136+</b> silently ignores the debug port on your default profile — which is why the tool insists on a dedicated one.</li>
+      <li><b>One session per account</b> on many staging environments: a dry-run will log out your recording browser.</li>
+    </ul>
+  </section>
+
+  <footer>
+    <span>MIT · npm i -D playwright-flow-recorder</span>
+    <span>built by Rakesh Barik</span>
+  </footer>
+</div>
+
+<script>
+  (function () {
+    'use strict';
+
+    var hud = document.getElementById('hud');
+    var nameBox = document.getElementById('hudName');
+    var recBtn = document.getElementById('hudRec');
+    var noteBtn = document.getElementById('hudNote');
+    var assertBtn = document.getElementById('hudAssert');
+    var genBtn = document.getElementById('hudGen');
+    var chip = document.getElementById('hudChip');
+    var hudPanel = document.getElementById('hudPanel');
+    var stream = document.getElementById('stream');
+    var streamEmpty = document.getElementById('streamEmpty');
+    var streamState = document.getElementById('streamState');
+    var viewport = document.getElementById('viewport');
+    var urlbar = document.getElementById('urlbar');
+    var outWrap = document.getElementById('outWrap');
+    var out = document.getElementById('out');
+    var outMeta = document.getElementById('outMeta');
+    var playBtn = document.getElementById('playBtn');
+    var resetBtn = document.getElementById('resetBtn');
+    var hint = document.getElementById('hint');
+    var reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+    var state = { rec: false, seq: 0, scenario: '', armed: false, stopped: false, queued: false, playing: false };
+    var counts = { ev: 0, as: 0, no: 0, ig: 0 };
+    var palette = null;
+
+    function setCount(id, v) { document.getElementById(id).textContent = v; }
+
+    /* selector candidates, mirroring the real ranking */
+    var CANDIDATES = {
+      searchBox: '[data-testid="order-search"]',
+      filterPending: '[data-testid="filter-pending"]',
+      approveBtn: '#approve-1043',
+      statusCell: 'td[aria-label="status"]',
+      filterAll: '[data-testid="filter-all"]',
+      filterApproved: '[data-testid="filter-approved"]'
+    };
+
+    function emit(kind, value, cand) {
+      if (!state.rec && kind !== 'marker') return;
+      state.seq++;
+      counts.ev++;
+      if (kind === 'assert') counts.as++;
+      if (kind === 'note') counts.no++;
+      setCount('cEv', counts.ev); setCount('cAs', counts.as); setCount('cNo', counts.no);
+      if (streamEmpty) { streamEmpty.remove(); streamEmpty = null; }
+      var row = document.createElement('div');
+      row.className = 'ev k-' + kind;
+      var n = document.createElement('span'); n.className = 'n'; n.textContent = state.seq;
+      var k = document.createElement('span'); k.className = 'k'; k.textContent = kind;
+      var v = document.createElement('span'); v.className = 'v'; v.textContent = value;
+      if (cand) {
+        var c = document.createElement('span');
+        c.className = 'cand';
+        c.textContent = 'candidates: ' + cand + ' · +5 more';
+        v.appendChild(c);
+      }
+      row.appendChild(n); row.appendChild(k); row.appendChild(v);
+      stream.appendChild(row);
+      stream.scrollTop = stream.scrollHeight;
+    }
+
+    function ignored(what) {
+      counts.ig++;
+      setCount('cIg', counts.ig);
+      if (streamEmpty) return;
+      var row = document.createElement('div');
+      row.className = 'ev';
+      var n = document.createElement('span'); n.className = 'n'; n.textContent = '·';
+      var k = document.createElement('span'); k.className = 'k ghost'; k.textContent = 'ignored';
+      var v = document.createElement('span'); v.className = 'v ghost'; v.textContent = what + ' — not recording';
+      row.appendChild(n); row.appendChild(k); row.appendChild(v);
+      stream.appendChild(row);
+      stream.scrollTop = stream.scrollHeight;
+    }
+
+    /* ---------- record / stop ---------- */
+    function startSeg() {
+      state.scenario = nameBox.value.trim() || 'approve the first pending order';
+      state.rec = true;
+      state.stopped = false;
+      hud.setAttribute('data-rec', '1');
+      recBtn.textContent = '⏹ stop: ' + state.scenario.slice(0, 14);
+      streamState.textContent = 'recording';
+      nameBox.value = '';
+      emit('marker', 'recording-start · "' + state.scenario + '" · ' + urlbar.textContent);
+    }
+    function stopSeg() {
+      state.rec = false;
+      state.stopped = true;
+      hud.setAttribute('data-rec', '0');
+      recBtn.textContent = '⏺ record';
+      streamState.textContent = 'stopped';
+      state.rec = true; emit('marker', 'recording-stop · snapshot: title, headings, final field values'); state.rec = false;
+      genBtn.disabled = false;
+      chip.textContent = '1 segment ready';
+    }
+    recBtn.addEventListener('click', function () { state.rec ? stopSeg() : startSeg(); });
+
+    /* ---------- note ---------- */
+    noteBtn.addEventListener('click', function () {
+      if (!state.rec) { ignored('✎ note'); return; }
+      nameBox.placeholder = 'note, then ⏎';
+      nameBox.focus();
+      nameBox.dataset.mode = 'note';
+    });
+    nameBox.addEventListener('keydown', function (e) {
+      if (e.key !== 'Enter') return;
+      if (nameBox.dataset.mode === 'note') {
+        var t = nameBox.value.trim() || 'the badge must read Approved after this';
+        emit('note', '"' + t + '"');
+        nameBox.value = '';
+        nameBox.placeholder = 'scenario name';
+        delete nameBox.dataset.mode;
+      } else if (!state.rec) {
+        startSeg();
+      }
+    });
+
+    /* ---------- assert palette ---------- */
+    assertBtn.addEventListener('click', function () {
+      if (!state.rec) { ignored('⌥ assert'); return; }
+      state.armed = !state.armed;
+      document.body.classList.toggle('assert-arm', state.armed);
+      hint.textContent = state.armed
+        ? 'Assert mode armed — now click any element in the app. (In the real tool: ⌥/Alt+Click, no mode needed.)'
+        : 'Or drive it yourself: ⏺ record → click things → ⌥ assert → ⏹ → ⚡';
+    });
+
+    function closePalette() {
+      if (palette) { palette.remove(); palette = null; }
+    }
+
+    function openPalette(el, label, text) {
+      closePalette();
+      var box = el.getBoundingClientRect();
+      var vp = viewport.getBoundingClientRect();
+      palette = document.createElement('div');
+      palette.className = 'palette';
+      var left = Math.min(box.left - vp.left, viewport.clientWidth - 196);
+      palette.style.left = Math.max(8, left) + 'px';
+      palette.style.top = (box.bottom - vp.top + 8) + 'px';
+
+      var ph = document.createElement('div');
+      ph.className = 'ph';
+      ph.textContent = 'assert: ' + (text || label);
+      palette.appendChild(ph);
+
+      var exp = document.createElement('input');
+      exp.className = 'exp';
+      exp.value = text || '';
+      exp.placeholder = 'expected text';
+      exp.setAttribute('aria-label', 'expected text');
+      palette.appendChild(exp);
+
+      [['has this text', 'text'], ['is visible', 'visible'], ['is enabled', 'enabled'],
+       ['check this row', 'row'], ['disappears later', 'absent-later']].forEach(function (p) {
+        var b = document.createElement('button');
+        b.textContent = p[0];
+        b.addEventListener('click', function () {
+          var expected = p[1] === 'text' ? ' expected="' + exp.value + '"' : (p[1] === 'row' ? ' expected=[#1043, Acme Ltd, ₹42,000, Approved]' : '');
+          emit('assert', 'predicate=' + p[1] + expected + ' on "' + label + '"', CANDIDATES[label] || null);
+          closePalette();
+          state.armed = false;
+          document.body.classList.remove('assert-arm');
+          hint.textContent = 'Assertion captured with the predicate you chose — never downgraded to a text check.';
+        });
+        palette.appendChild(b);
+      });
+      viewport.appendChild(palette);
+    }
+
+    /* ---------- the fake app ---------- */
+    function applyFilter(f) {
+      Array.prototype.forEach.call(document.querySelectorAll('#rows tr'), function (tr) {
+        tr.hidden = !(f === 'all' || tr.dataset.status === f);
+      });
+      Array.prototype.forEach.call(document.querySelectorAll('.chip'), function (c) {
+        c.setAttribute('aria-pressed', String(c.dataset.filter === f));
+      });
+      urlbar.textContent = 'https://app.example.com/orders?status=' + (f === 'all' ? 'all' : f.toLowerCase());
+    }
+
+    viewport.addEventListener('click', function (e) {
+      if (e.target.closest('.hud') || e.target.closest('.palette')) return;
+      var el = e.target.closest('[data-rec]');
+      closePalette();
+      if (!el) return;
+      var label = el.dataset.rec;
+      var text = (el.textContent || '').trim().slice(0, 26);
+
+      if (state.armed) {
+        e.preventDefault();
+        openPalette(el, label, text);
+        return;
+      }
+      if (el.classList.contains('chip')) {
+        applyFilter(el.dataset.filter);
+        if (!state.rec) { ignored('click "' + label + '"'); return; }
+        emit('click', '"' + text + '" · ' + label, CANDIDATES[label]);
+        return;
+      }
+      if (el.classList.contains('btn-approve')) {
+        if (el.disabled) return;
+        var tr = el.closest('tr');
+        if (!state.rec) { ignored('click "Approve"'); return; }
+        emit('click', '"Approve" · ' + label + ' · row 1 of 2', CANDIDATES[label]);
+        emit('net', 'POST /api/orders/1043/approve · 200');
+        tr.dataset.status = 'Approved';
+        var badge = tr.querySelector('.status');
+        badge.textContent = 'Approved';
+        badge.classList.add('approved');
+        el.disabled = true;
+        return;
+      }
+      if (el.id === 'q' && !state.rec) ignored('click "search"');
+    });
+
+    var typeTimer = null;
+    document.getElementById('q').addEventListener('input', function (e) {
+      var val = e.target.value;
+      clearTimeout(typeTimer);
+      if (!state.rec) {
+        typeTimer = setTimeout(function () { ignored('typed "' + val + '"'); }, 500);
+        return;
+      }
+      typeTimer = setTimeout(function () {
+        emit('type', '"' + val + '" · searchBox', CANDIDATES.searchBox);
+      }, 450);
+    });
+    document.getElementById('q').addEventListener('keydown', function (e) {
+      if (e.key !== 'Enter' || !state.rec) return;
+      clearTimeout(typeTimer);
+      var val = e.target.value;
+      /* flushed by Enter — the bug this project fixed: the value must land BEFORE the key */
+      emit('type', '"' + val + '" · searchBox · flushed by Enter', CANDIDATES.searchBox);
+      emit('key', 'Enter');
+    });
+
+    /* ---------- hand-off ---------- */
+    var GHERKIN = [
+      ['@orders @recorded @wip', 'tag', ''],
+      ['Scenario: approve the first pending order', 'sc', ''],
+      ['  Given user is on web app', 'kw', 'existing'],
+      ['  When user navigates to "Orders"', 'kw', 'existing'],
+      ['  And user filters orders by "Pending"', 'kw', 'existing'],
+      ['  And user searches for "Acme"', 'kw', 'existing'],
+      ['  And user approves the order in row 1', 'kw', 'NEW'],
+      ['  Then "statusCell" should have text "Approved"', 'kw', 'existing']
+    ];
+
+    function renderPanel(stage) {
+      hudPanel.hidden = false;
+      hudPanel.className = 'hud-panel';
+      hudPanel.textContent = '';
+      var h = document.createElement('div');
+      h.className = 'ph';
+      h.textContent = 'hand-off to the AI agent';
+      hudPanel.appendChild(h);
+
+      var card = document.createElement('div');
+      card.className = 'hcard ' + (stage === 'done' ? 'done' : 'working');
+      var r1 = document.createElement('div'); r1.className = 'row1';
+      var b = document.createElement('b'); b.textContent = state.scenario;
+      var pill = document.createElement('span');
+      pill.className = 'hpill ' + (stage === 'done' ? 'done' : 'working');
+      pill.textContent = stage === 'done' ? 'done' : 'working';
+      r1.appendChild(b); r1.appendChild(pill);
+      card.appendChild(r1);
+
+      var msg = document.createElement('div');
+      msg.className = 'msg';
+      msg.textContent = stage === 'done'
+        ? 'Appended to orders.feature as @recorded @wip.'
+        : 'Reconciling against the step index.';
+      card.appendChild(msg);
+
+      var dets = stage === 'done'
+        ? ['1 assertion carried over', 'steps: 5 reused, 1 new']
+        : ['matched 4 existing steps so far', 'checking the approve step'];
+      dets.forEach(function (d) {
+        var e = document.createElement('div');
+        e.className = 'det';
+        e.textContent = '· ' + d;
+        card.appendChild(e);
+      });
+
+      if (stage === 'done') {
+        var f = document.createElement('div');
+        f.className = 'fileline';
+        f.textContent = 'features/orders.feature';
+        card.appendChild(f);
+      }
+      hudPanel.appendChild(card);
+    }
+
+    function typeOut(i) {
+      if (i >= GHERKIN.length) {
+        outMeta.textContent = '5 reused · 1 new · @wip';
+        return;
+      }
+      var row = GHERKIN[i];
+      var line = document.createElement('div');
+      var txt = row[0];
+      if (row[1] === 'tag') {
+        var s = document.createElement('span'); s.className = 'tag'; s.textContent = txt; line.appendChild(s);
+      } else if (row[1] === 'kw') {
+        var m = txt.match(/^(\s*)(Given|When|And|Then)(.*)$/);
+        var ind = document.createTextNode(m[1]);
+        var kw = document.createElement('span'); kw.className = 'kw'; kw.textContent = m[2];
+        line.appendChild(ind); line.appendChild(kw);
+        var rest = m[3].split(/("[^"]*")/);
+        rest.forEach(function (part) {
+          if (/^"/.test(part)) {
+            var q = document.createElement('span'); q.className = 'str'; q.textContent = part; line.appendChild(q);
+          } else line.appendChild(document.createTextNode(part));
+        });
+        var mk = document.createElement('span');
+        mk.className = 'mark' + (row[2] === 'NEW' ? ' new' : '');
+        mk.textContent = '   [' + row[2] + ']';
+        line.appendChild(mk);
+      } else {
+        line.textContent = txt;
+      }
+      out.appendChild(line);
+      setTimeout(function () { typeOut(i + 1); }, reduce ? 1 : 90);
+    }
+
+    genBtn.addEventListener('click', function () {
+      if (state.queued) return;
+      state.queued = true;
+      genBtn.disabled = true;
+      state.rec = true; emit('marker', 'create-scenario · queued to session.jsonl.queue.json'); state.rec = false;
+      chip.textContent = '1 queued · awaiting pickup';
+      streamState.textContent = 'handed off';
+      setTimeout(function () {
+        chip.textContent = '⏳ ' + state.scenario.slice(0, 16);
+        renderPanel('working');
+      }, reduce ? 10 : 700);
+      setTimeout(function () {
+        chip.textContent = '✓ all 1 done';
+        renderPanel('done');
+        outWrap.hidden = false;
+        out.textContent = '';
+        typeOut(0);
+        hint.textContent = 'That scenario now reuses 5 steps you already had. Only the approve step was new.';
+      }, reduce ? 30 : 2400);
+    });
+
+    chip.addEventListener('click', function () {
+      if (hudPanel.hidden === false) hudPanel.hidden = true;
+      else if (state.queued) hudPanel.hidden = false;
+    });
+
+    /* ---------- scripted play ---------- */
+    function sleep(ms) { return new Promise(function (r) { setTimeout(r, reduce ? 1 : ms); }); }
+
+    async function play() {
+      if (state.playing) return;
+      reset();
+      state.playing = true;
+      playBtn.disabled = true;
+      playBtn.textContent = '▶ playing…';
+
+      hint.textContent = 'Watch: clicks before ⏺ are ignored on purpose.';
+      document.querySelector('[data-rec="filterAll"]').click();
+      await sleep(700);
+      var q = document.getElementById('q');
+      q.value = 'Acm';
+      q.dispatchEvent(new Event('input', { bubbles: true }));
+      await sleep(900);
+      q.value = '';
+
+      hint.textContent = 'Now ⏺ — capture begins here, at the part that matters.';
+      nameBox.value = 'approve the first pending order';
+      await sleep(600);
+      startSeg();
+      await sleep(700);
+
+      document.querySelector('[data-rec="filterPending"]').click();
+      await sleep(800);
+
+      q.value = 'Acme';
+      q.dispatchEvent(new Event('input', { bubbles: true }));
+      await sleep(700);
+      q.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+      await sleep(800);
+
+      var app = document.querySelector('#rows tr:not([hidden]) .btn-approve');
+      if (app) app.click();
+      await sleep(900);
+
+      hint.textContent = 'Marking what to verify — this is the bit codegen has no concept of.';
+      state.armed = true;
+      document.body.classList.add('assert-arm');
+      var badge = document.querySelector('#rows tr:not([hidden]) .status');
+      openPalette(badge, 'statusCell', 'Approved');
+      await sleep(1300);
+      var textBtn = palette && palette.querySelector('button');
+      if (textBtn) textBtn.click();
+      await sleep(700);
+
+      noteBtn.click();
+      nameBox.value = 'the row must stay Approved after a refresh';
+      await sleep(500);
+      nameBox.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+      await sleep(700);
+
+      stopSeg();
+      hint.textContent = '⏹ — and ⚡ lights up, because there is now something to hand over.';
+      await sleep(900);
+      genBtn.click();
+
+      playBtn.disabled = false;
+      playBtn.textContent = '▶ Play it again';
+      state.playing = false;
+    }
+
+    function reset() {
+      state = { rec: false, seq: 0, scenario: '', armed: false, stopped: false, queued: false, playing: false };
+      counts = { ev: 0, as: 0, no: 0, ig: 0 };
+      setCount('cEv', 0); setCount('cAs', 0); setCount('cNo', 0); setCount('cIg', 0);
+      closePalette();
+      document.body.classList.remove('assert-arm');
+      hud.setAttribute('data-rec', '0');
+      recBtn.textContent = '⏺ record';
+      genBtn.disabled = true;
+      chip.textContent = '';
+      hudPanel.hidden = true;
+      hudPanel.textContent = '';
+      streamState.textContent = 'idle';
+      outWrap.hidden = true;
+      out.textContent = '';
+      outMeta.textContent = '';
+      nameBox.value = '';
+      nameBox.placeholder = 'scenario name';
+      delete nameBox.dataset.mode;
+      stream.textContent = '';
+      var d = document.createElement('div');
+      d.className = 'stream-empty';
+      d.id = 'streamEmpty';
+      d.innerHTML = 'Nothing is captured yet.<br><br>Click around the app on the left — filters, the search box, Approve. Watch this stay empty: that\'s the point. Login and navigation never reach your test.<br><br>Press <b>⏺ record</b> when you\'re at the part that matters.';
+      stream.appendChild(d);
+      streamEmpty = d;
+      /* restore the app */
+      applyFilter('all');
+      document.getElementById('q').value = '';
+      Array.prototype.forEach.call(document.querySelectorAll('#rows tr'), function (tr, i) {
+        var badge = tr.querySelector('.status');
+        var btn = tr.querySelector('.btn-approve');
+        var st = i === 2 ? 'Approved' : 'Pending';
+        tr.dataset.status = st;
+        badge.textContent = st;
+        badge.classList.toggle('approved', st === 'Approved');
+        btn.disabled = st === 'Approved';
+      });
+      hint.textContent = 'Or drive it yourself: ⏺ record → click things → ⌥ assert → ⏹ → ⚡';
+    }
+
+    playBtn.addEventListener('click', play);
+    resetBtn.addEventListener('click', function () { reset(); playBtn.textContent = '▶ Play the whole flow'; });
+    document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closePalette(); });
+  })();
+</script>
+
+</body>
+</html>
