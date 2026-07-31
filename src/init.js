@@ -22,10 +22,16 @@ Usage
   flow-recorder init [options]
 
 Options
-  --dir <path>   Project directory to scaffold (default: cwd)
-  --force        Overwrite an existing flow-recorder.config.json
-  --no-skill     Skip installing .claude/skills/record-flow/SKILL.md
-  -h, --help     Show this help
+  --dir <path>     Project directory to scaffold (default: cwd)
+  --force          Overwrite an existing flow-recorder.config.json
+  --agent <list>   Where to point your assistant at the conversion instructions:
+                   agents (AGENTS.md), cursor, copilot, all. Default: whichever
+                   of those files already exist in the repo.
+  --no-skill       Skip installing .claude/skills/record-flow/SKILL.md
+  -h, --help       Show this help
+
+Every project gets .flow-recorder/CONVERT.md — vendor-neutral instructions that
+Cursor, Copilot, Windsurf, Aider, ChatGPT or a human can all work from. Commit it.
 `;
 
 const SKIP_DIRS = new Set([
@@ -237,7 +243,66 @@ const runInit = (argv = []) => {
 
   fs.writeFileSync(target, JSON.stringify(cfg, null, 2) + '\n');
 
-  // --- install the agent skill ------------------------------------------------
+  // --- the vendor-neutral conversion contract ----------------------------------
+  // Written for EVERY project, whatever assistant the team uses. Claude Code gets a
+  // skill it can run on its own; without this, everyone else got nothing in their
+  // repo at all and had to go and find a prompt in the package's docs. Same
+  // instructions, resolved against this project's real paths, in a file any
+  // assistant can be pointed at — including one that only reads what you paste.
+  const convertPath = path.join(root, path.dirname(DEFAULTS.outDir), 'CONVERT.md');
+  const tpl = path.join(__dirname, '..', 'skills', 'convert', 'CONVERT.template.md');
+  if (fs.existsSync(tpl)) {
+    const subs = {
+      CONFIG: path.relative(root, target),
+      OUTDIR: DEFAULTS.outDir,
+      INDEX: DEFAULTS.indexFile,
+      FEATUREDIR: featureDir,
+      FRAMEWORK: framework,
+      DRYRUN: cfg.conventions.dryRunCommand || '(not set — add conventions.dryRunCommand)',
+      TAGS: cfg.conventions.tags.join(' '),
+    };
+    const body = fs.readFileSync(tpl, 'utf8').replace(/\{\{(\w+)\}\}/g, (m, k) => (k in subs ? subs[k] : m));
+    fs.mkdirSync(path.dirname(convertPath), { recursive: true });
+    fs.writeFileSync(convertPath, body);
+  }
+  const convertRel = path.relative(root, convertPath);
+
+  // --- point each assistant at it where that assistant actually looks ----------
+  // One pointer line per tool, in the file that tool reads by convention. Created
+  // when absent, appended to when present, never duplicated — these are files the
+  // user owns and may have written a lot of their own rules into.
+  const POINTER = 'When converting a browser recording into a test, follow ' + convertRel + '.';
+  const pointerTargets = [
+    { tool: 'agents', file: 'AGENTS.md', heading: '# Agent instructions' },
+    { tool: 'cursor', file: path.join('.cursor', 'rules', 'flow-recorder.mdc'), heading: '---\nalwaysApply: true\n---' },
+    { tool: 'copilot', file: path.join('.github', 'copilot-instructions.md'), heading: '# Copilot instructions' },
+  ];
+  const wantedAgents = String(flag('agent', '') || '')
+    .split(',')
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+  const pointers = [];
+  for (const t of pointerTargets) {
+    const abs = path.join(root, t.file);
+    // Default: write only where the tool is already in use. `--agent` forces one in.
+    const wanted = wantedAgents.length ? wantedAgents.includes(t.tool) || wantedAgents.includes('all') : fs.existsSync(abs);
+    if (!wanted) continue;
+    try {
+      if (fs.existsSync(abs)) {
+        const cur = fs.readFileSync(abs, 'utf8');
+        if (cur.includes(convertRel)) continue; // already pointed there
+        fs.writeFileSync(abs, cur.replace(/\s*$/, '') + '\n\n' + POINTER + '\n');
+      } else {
+        fs.mkdirSync(path.dirname(abs), { recursive: true });
+        fs.writeFileSync(abs, t.heading + '\n\n' + POINTER + '\n');
+      }
+      pointers.push(t.file);
+    } catch (_) {}
+  }
+
+  // --- install the Claude Code skill -------------------------------------------
+  // Claude Code can drive the whole session (follow the clicks live, drain the
+  // queue), which is more than a pointer can express — so it keeps a real skill.
   let skillPath = null;
   if (wantSkill) {
     const src = path.join(__dirname, '..', 'skills', 'record-flow', 'SKILL.md');
@@ -254,7 +319,11 @@ const runInit = (argv = []) => {
     }
   }
 
-  const ignored = appendGitignore(root, [path.dirname(DEFAULTS.outDir) + '/', LOCAL_NAMES[0]]);
+  // Ignore what is GENERATED, not the whole namespace. `.flow-recorder/` wholesale
+  // would also bury CONVERT.md, which exists precisely to be committed and shared
+  // with the team's assistants. Recordings carry typed values and URLs and must
+  // never be committed; the index is derived from the repo and would only churn.
+  const ignored = appendGitignore(root, [DEFAULTS.outDir + '/', DEFAULTS.indexFile, LOCAL_NAMES[0]]);
 
   // --- report ----------------------------------------------------------------
   console.log('\nWrote ' + path.relative(root, target) + '\n');
@@ -265,7 +334,14 @@ const runInit = (argv = []) => {
   console.log(
     '  locatorFiles     ' + (Object.keys(locatorFiles).length ? JSON.stringify(locatorFiles) : '(none found — optional)')
   );
-  if (skillPath) console.log('\nInstalled agent skill: ' + skillPath);
+  console.log('\nAgent instructions:    ' + convertRel + '  (works with any assistant — commit it)');
+  if (pointers.length) {
+    console.log('Pointed at it from:    ' + pointers.join(', '));
+  } else {
+    console.log('                       no AGENTS.md / .cursor / .github here — add a pointer');
+    console.log('                       yourself, or: flow-recorder init --agent agents,cursor,copilot');
+  }
+  if (skillPath) console.log('Claude Code skill:     ' + skillPath + '  (drives the session end to end)');
   if (ignored.length) console.log('Added to .gitignore:   ' + ignored.join(', '));
 
   const gaps = [];

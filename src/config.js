@@ -36,7 +36,22 @@ const DEFAULTS = {
   chromeProfileDir: '~/.flow-recorder-chrome-profile',
   chromePath: '',
   // --- capture behaviour ---
-  maskPattern: 'pass|pwd|otp|pin|secret|token|cvv|card.?number',
+  // Field name/id/placeholder/type patterns whose typed value is never recorded.
+  // `auth(?!or)` so an "author" field stays readable — over-masking costs a test
+  // literal the user can see and fix; under-masking leaks a credential silently
+  // into a file that gets handed to an LLM. When in doubt, mask.
+  maskPattern: 'pass|pwd|otp|pin|secret|token|cvv|card.?number|api.?key|access.?key|auth(?!or)|credential|ssn|iban',
+  // Query-string parameters whose VALUE is redacted from every recorded URL.
+  // A magic-link or SSO callback (?access_token=…&code=…) is an ordinary thing to
+  // record, and the URL is stamped on every single event — so one such landing page
+  // contaminates the entire file with a live credential, dozens of times over.
+  redactUrlParams: 'token|code|key|secret|password|pwd|auth|session|sid|jwt|bearer|signature|sig|otp|access|refresh|credential|ticket|assertion',
+  // Mask EVERY typed value, not just fields whose name looks sensitive. Pattern
+  // matching cannot help when the field is called `j_idt42` — legacy JSF/ASP.NET
+  // and obfuscated builds emit exactly that, and a name-based rule reads a secret
+  // straight through. Regulated teams turn this on and resolve every literal from
+  // fixtures instead; conversion quality drops, which is why it is not the default.
+  maskAllInput: false,
   typeDebounceMs: 900,
   captureNetwork: true,
   // --- agent / conversion ---
@@ -186,10 +201,58 @@ const makeFlag = (argv) => (name, def) => {
   return v === undefined || String(v).startsWith('--') ? true : v;
 };
 
+/**
+ * Strip credential-bearing values out of a URL, keeping everything that makes the
+ * URL useful to the converter (origin, path, and the parameter NAMES — an agent
+ * still needs to see that the page took an `access_token`, just not what it was).
+ *
+ * Covers the query string, the fragment (implicit-grant flows put the token
+ * there), and userinfo. On any parse failure it falls back to a textual scrub
+ * rather than returning the input: a URL we could not understand is exactly the
+ * one most likely to be carrying something odd.
+ */
+const redactUrl = (url, pattern) => {
+  const raw = String(url == null ? '' : url);
+  if (!raw) return raw;
+  let re;
+  try {
+    re = new RegExp('^(?:' + (pattern || DEFAULTS.redactUrlParams) + ')$', 'i');
+  } catch (_) {
+    re = new RegExp('^(?:' + DEFAULTS.redactUrlParams + ')$', 'i');
+  }
+  // Match per NAME COMPONENT, not against the whole name. Anchoring on the whole
+  // string misses every compound a real auth flow actually uses — access_token,
+  // id_token, X-Auth-Token, apiKey — while plain substring matching would redact
+  // zipcode, monkey and keyword. Splitting on separators and camelCase gets both.
+  const sensitive = (name) =>
+    String(name)
+      .split(/[^A-Za-z0-9]+|(?<=[a-z0-9])(?=[A-Z])/)
+      .some((part) => part && re.test(part));
+  const scrubPairs = (s) =>
+    s.replace(/([?#&]|^)([^=&#?]+)=([^&#]*)/g, (m, lead, k) => {
+      let name = k;
+      try {
+        name = decodeURIComponent(k);
+      } catch (_) {}
+      return sensitive(name.trim()) ? lead + k + '=***' : m;
+    });
+  try {
+    const u = new URL(raw);
+    if (u.password) u.password = '***';
+    for (const k of Array.from(u.searchParams.keys())) if (sensitive(k)) u.searchParams.set(k, '***');
+    if (u.hash.length > 1) u.hash = scrubPairs(u.hash);
+    return u.href;
+  } catch (_) {
+    return scrubPairs(raw); // relative URL, about:blank, or something malformed
+  }
+};
+
 // The subset of config handed to the in-page script. Keep it small and
 // serialisable — it is injected as JSON into every page.
 const pageConfig = (cfg) => ({
   maskPattern: cfg.maskPattern || DEFAULTS.maskPattern,
+  maskAllInput: !!cfg.maskAllInput,
+  redactUrlParams: cfg.redactUrlParams || DEFAULTS.redactUrlParams,
   typeDebounceMs: Number(cfg.typeDebounceMs) || DEFAULTS.typeDebounceMs,
   agentName: cfg.agentName || DEFAULTS.agentName,
 });
@@ -228,5 +291,6 @@ module.exports = {
   loadConfig,
   makeFlag,
   pageConfig,
+  redactUrl,
   validateConventions,
 };

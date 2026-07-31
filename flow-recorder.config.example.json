@@ -8,7 +8,12 @@
   "chromeProfileDir": "~/.flow-recorder-chrome-profile",
   "chromePath": "",
 
-  "maskPattern": "pass|pwd|otp|pin|secret|token|cvv|card.?number",
+  "//maskPattern": "Typed values are recorded as ***masked*** when the field's type, name, id or placeholder matches this. type=password is always masked regardless. `auth(?!or)` keeps an 'author' field readable.",
+  "maskPattern": "pass|pwd|otp|pin|secret|token|cvv|card.?number|api.?key|access.?key|auth(?!or)|credential|ssn|iban",
+  "//maskAllInput": "OPTIONAL. Mask EVERY typed value, not just fields that look sensitive. The only defence when the field is called `j_idt42` (legacy JSF/ASP.NET, obfuscated builds) and no pattern can tell what it holds. Conversion quality drops — the agent must resolve every literal from fixtures — which is the trade regulated teams want.",
+  "maskAllInput": false,
+  "//redactUrlParams": "URL parameters whose VALUE is replaced with *** in the per-event url stamp, in nav events and in net query strings. Matched per name component, so access_token / id_token / X-Auth-Token / apiKey are caught while zipcode and monkey are not. Covers the fragment too, where implicit-grant flows put the token. Parameter names survive so the agent still sees the request shape.",
+  "redactUrlParams": "token|code|key|secret|password|pwd|auth|session|sid|jwt|bearer|signature|sig|otp|access|refresh|credential|ticket|assertion",
   "typeDebounceMs": 900,
   "captureNetwork": true,
 

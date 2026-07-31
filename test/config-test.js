@@ -138,10 +138,20 @@ check('deepMerge recurses into nested objects', () =>
 
 // --- 11. pageConfig is the small, serialisable subset ----------------------
 const pc = pageConfig(loadConfig({ cwd: bare }).cfg);
-check('pageConfig exposes only mask/debounce/agentName', () =>
-  JSON.stringify(Object.keys(pc).sort()) === '["agentName","maskPattern","typeDebounceMs"]'
+check('pageConfig exposes only the masking/redaction/debounce/agentName subset', () =>
+  JSON.stringify(Object.keys(pc).sort()) ===
+  '["agentName","maskAllInput","maskPattern","redactUrlParams","typeDebounceMs"]'
 );
 check('pageConfig maskPattern is a usable regex source', () => new RegExp(pc.maskPattern, 'i').test('cardNumber'));
+check('pageConfig redactUrlParams is a usable regex source', () =>
+  new RegExp('^(?:' + pc.redactUrlParams + ')$', 'i').test('token')
+);
+// The page-side script mirrors these two patterns; a default that cannot compile
+// there would silently fall back and stop masking what the config asked for.
+check('maskPattern spares "author" but catches "auth"', () => {
+  const re = new RegExp(DEFAULTS.maskPattern, 'i');
+  return re.test('authToken') && !re.test('author');
+});
 
 // --- report ---------------------------------------------------------------
 let ok = true;
