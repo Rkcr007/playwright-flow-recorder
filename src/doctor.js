@@ -116,6 +116,34 @@ const runDoctor = async (argv = []) => {
     // What ⚡ actually does. Unset is a legitimate setup (an agent watches the
     // queue file), but it must be stated — assuming ⚡ notifies something when it
     // does not is the difference between a handed-off scenario and a forgotten one.
+    // Which assistant, if any, has actually been told how to convert a recording.
+    // "Nothing picked up my ⚡" is nearly always this: the recorder is fine, and no
+    // agent in the repo has ever been pointed at the instructions.
+    const convertFile = path.join(loaded.projectRoot, path.dirname(loaded.cfg.outDir || '.flow-recorder/x'), 'CONVERT.md');
+    if (fs.existsSync(convertFile)) {
+      const wired = [
+        ['AGENTS.md', 'AGENTS.md'],
+        ['Cursor', path.join('.cursor', 'rules', 'flow-recorder.mdc')],
+        ['Copilot', path.join('.github', 'copilot-instructions.md')],
+        ['Claude Code', path.join('.claude', 'skills', 'record-flow', 'SKILL.md')],
+      ].filter(([, rel]) => fs.existsSync(path.join(loaded.projectRoot, rel)));
+      add('pass', 'Agent instructions', path.relative(loaded.projectRoot, convertFile));
+      add(
+        wired.length ? 'pass' : 'warn',
+        'Assistants wired up',
+        wired.length
+          ? wired.map(([n]) => n).join(', ')
+          : 'none — no assistant has been pointed at CONVERT.md. Add a pointer, or run\n' +
+            '        `flow-recorder init --agent agents,cursor,copilot`'
+      );
+    } else {
+      add(
+        'warn',
+        'No agent instructions',
+        'CONVERT.md is missing — run `flow-recorder init` so any assistant can convert recordings'
+      );
+    }
+
     const hook = loaded.cfg.onCreate;
     const hookStr = Array.isArray(hook) ? hook.join(' ') : String(hook || '').trim();
     if (hookStr) add('pass', 'onCreate hook (⚡)', hookStr);

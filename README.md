@@ -202,7 +202,9 @@ Discovery walks up from the current directory: `flow-recorder.config.json`, then
 | `indexFile` | `.flow-recorder/step-index.json` | |
 | `chromeProfileDir` | `~/.flow-recorder-chrome-profile` | persistent login profile |
 | `chromePath` | auto-detected | explicit browser binary |
-| `maskPattern` | `pass\|pwd\|otp\|pin\|secret\|token\|cvv\|card.?number` | fields recorded as `***masked***` |
+| `maskPattern` | `pass\|pwd\|otp\|pin\|secret\|token\|cvv\|card.?number\|api.?key\|access.?key\|auth(?!or)\|credential\|ssn\|iban` | fields recorded as `***masked***` |
+| `maskAllInput` | `false` | mask **every** typed value — see [What ends up in a recording](#what-ends-up-in-a-recording) |
+| `redactUrlParams` | `token\|code\|key\|secret\|password\|…\|assertion` | URL parameters whose value is replaced with `***` |
 | `typeDebounceMs` | `900` | how long a typing pause ends a `type` event — also flushed early by Enter, blur, a click elsewhere, or navigation, so a submitted value is never lost |
 | `captureNetwork` | `true` | record XHR/fetch during segments |
 | `userMode` | `expert` | `guided` = plain-language mode for manual testers |
@@ -211,6 +213,66 @@ Discovery walks up from the current directory: `flow-recorder.config.json`, then
 | `conventions` | — | **your framework** — see [docs/INTEGRATION.md](docs/INTEGRATION.md) |
 
 See [flow-recorder.config.example.json](flow-recorder.config.example.json) for a full annotated file.
+
+## What ends up in a recording
+
+A recording is written to be handed to an AI agent — often a hosted one — so it is
+worth being precise about what it contains.
+
+**Redacted automatically**
+
+- Values typed into `type="password"` fields, and into fields whose type, name, id or
+  placeholder matches `maskPattern` — recorded as `***masked***`.
+- Credential-bearing URL parameters, replaced with `***`, in the per-event `url` stamp,
+  in `nav` events and in `net` query strings. Matching is per name component, so
+  `access_token`, `id_token`, `X-Auth-Token` and `apiKey` are all caught while
+  `zipcode` and `monkey` are left alone. Fragments are covered too, which is where
+  implicit-grant flows put the token. Parameter *names* survive — the agent still sees
+  the shape of the request.
+- `latest.txt`, the JSONL, the queue and the ack all live in a directory that
+  **git-ignores itself**, whether or not you ran `init`.
+
+**Not redacted**
+
+- Ordinary typed values. They are the test data, and conversion needs them.
+- Anything in a field whose name reveals nothing — legacy JSF/ASP.NET `j_idt42`, or an
+  obfuscated build. No name-based rule can help there. Set `"maskAllInput": true` and
+  every typed value becomes `***masked***`; conversion quality drops, because the agent
+  then has to resolve every literal from fixtures, which is exactly the trade regulated
+  teams want.
+- Email addresses and identifiers in URLs. Add them to `redactUrlParams` if your
+  threat model needs it.
+
+The recorder prints its posture at startup, so nobody has to infer it.
+
+## Working with any assistant
+
+`init` writes **`.flow-recorder/CONVERT.md`** — the conversion contract, resolved
+against your project's real paths, in vendor-neutral Markdown. Claude Code, Cursor,
+Copilot, Windsurf, Cody, Aider, Continue, ChatGPT or a human can all work from it.
+**Commit it**; it is the one file a teammate's assistant needs.
+
+It also points whichever assistants you already use at that file, appending one line
+to the file each tool reads by convention:
+
+| Tool | File |
+|---|---|
+| Cursor, Copilot coding agent, Zed, Aider, Codex | `AGENTS.md` |
+| Cursor rules | `.cursor/rules/flow-recorder.mdc` |
+| GitHub Copilot Chat | `.github/copilot-instructions.md` |
+| Claude Code | `.claude/skills/record-flow/SKILL.md` (a full skill — it can drive the session live) |
+
+By default only files that already exist are touched. Force them with:
+
+```bash
+npx flow-recorder init --agent agents,cursor,copilot     # or --agent all
+```
+
+`flow-recorder doctor` reports which assistants are wired up, because "nothing picked
+up my ⚡" is nearly always "no agent in this repo was ever told what to do".
+
+Any assistant can also report progress back into the browser widget by writing the ack
+file — the protocol is in `CONVERT.md`. Nothing about it is Claude-specific.
 
 ### Making ⚡ actually reach an agent
 
@@ -223,6 +285,15 @@ widget says *"awaiting pickup"* rather than implying delivery.
 
 ```json
 { "onCreate": "claude -p \"Drain the flow-recorder queue at $FLOW_QUEUE_FILE\"" }
+```
+
+Any command works — the recorder does not care what is on the other end:
+
+```json
+{ "onCreate": "aider --yes --message \"Convert $FLOW_QUEUE_FILE per .flow-recorder/CONVERT.md\"" }
+{ "onCreate": "gh copilot suggest -t shell \"convert $FLOW_QUEUE_FILE\"" }
+{ "onCreate": ["osascript", "-e", "display notification \"scenario ready to convert\""] }
+{ "onCreate": "curl -sX POST $CI_WEBHOOK -d @$FLOW_QUEUE_FILE" }
 ```
 
 A string runs through the shell; an array (`["notify-send", "flow ready"]`) is spawned

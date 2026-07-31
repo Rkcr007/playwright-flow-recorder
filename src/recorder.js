@@ -15,7 +15,7 @@ const { spawn } = require('child_process');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
-const { loadConfig, makeFlag, pageConfig } = require('./config');
+const { loadConfig, makeFlag, pageConfig, redactUrl } = require('./config');
 
 const PW_MISSING =
   'flow-recorder needs Playwright.\n' +
@@ -67,6 +67,11 @@ const record = async (argv = []) => {
     },
   });
   const cfg = loaded.cfg;
+  // Every event carries the page URL, so a single SSO/magic-link landing page
+  // would otherwise stamp a live credential onto every line of the recording —
+  // a file whose whole purpose is to be handed to an AI agent.
+  const safeUrl = (u) => redactUrl(u, cfg.redactUrlParams);
+  const redactSearch = (s) => (s ? safeUrl('http://x/' + s).slice('http://x/'.length) : s);
   const pw = loadPlaywright();
 
   const doLaunch = !!flag('launch', false);
@@ -79,6 +84,18 @@ const record = async (argv = []) => {
   const name = String(flag('name', 'session')).replace(/[^\w.-]/g, '_') || 'session';
 
   fs.mkdirSync(outDir, { recursive: true });
+  // Recordings hold whatever the user typed and every URL they visited. `init`
+  // adds .flow-recorder/ to the project .gitignore, but recording deliberately
+  // works with no config at all — so the directory protects itself rather than
+  // relying on a setup step the user was told they could skip. Self-ignoring
+  // beats a root .gitignore entry here: it travels with --out and cannot be
+  // undone by someone rewriting the project's ignore file.
+  const dirIgnore = path.join(outDir, '.gitignore');
+  if (!fs.existsSync(dirIgnore)) {
+    try {
+      fs.writeFileSync(dirIgnore, '# Recordings can contain typed values and URLs. Never commit them.\n*\n');
+    } catch (_) {}
+  }
   const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
   const file = path.join(outDir, name + '-' + stamp + '.jsonl');
 
@@ -103,6 +120,50 @@ const record = async (argv = []) => {
       fs.writeFileSync(queueFile, JSON.stringify(queue, null, 2) + '\n');
     } catch (_) {}
   };
+  // --- one session at a time, per output directory -----------------------------
+  // Two recorders attached to the same browser both capture every click, so the
+  // same flow lands in two files while `latest.txt` — the pointer every agent
+  // follows — names whichever started last. The user sees one HUD and assumes one
+  // recording. Nothing is corrupted, but the agent converts a duplicate, or the
+  // wrong session entirely, and the failure looks like a recorder bug.
+  //
+  // A lock file rather than a refusal: a crashed run must not lock the directory
+  // for good, and a second session is legitimate if the first is really gone.
+  const lockFile = path.join(outDir, '.session.lock');
+  const readLock = () => {
+    try {
+      const lock = JSON.parse(fs.readFileSync(lockFile, 'utf8'));
+      process.kill(lock.pid, 0); // throws if that process is gone
+      return lock;
+    } catch (_) {
+      return null; // absent, unparseable, or stale
+    }
+  };
+  const live = readLock();
+  if (live) {
+    console.log('\n' + '─'.repeat(68));
+    console.log('Another recorder (pid ' + live.pid + ') is already recording into this directory:');
+    console.log('  ' + live.file);
+    console.log('Both will capture the same clicks, and latest.txt will point at only one');
+    console.log('of them — so an agent may convert the wrong session, or the same flow twice.');
+    console.log('Stop the other session, or pass --out <dir> to keep this one separate.');
+    console.log('─'.repeat(68) + '\n');
+  }
+  // Only take the lock if nobody live holds it. Overwriting a live holder's lock
+  // would make THIS session the one that deletes it on exit, leaving the still-running
+  // original unlocked and a third session unwarned.
+  if (!live) {
+    try {
+      fs.writeFileSync(lockFile, JSON.stringify({ pid: process.pid, file, startedAt: new Date().toISOString() }) + '\n');
+    } catch (_) {}
+  }
+  const releaseLock = () => {
+    try {
+      const held = JSON.parse(fs.readFileSync(lockFile, 'utf8'));
+      if (held.pid === process.pid) fs.unlinkSync(lockFile); // never clear someone else's
+    } catch (_) {}
+  };
+
   fs.writeFileSync(path.join(outDir, 'latest.txt'), file + '\n');
 
   // --- ⚡ hand-off hook ---------------------------------------------------------
@@ -216,7 +277,7 @@ const record = async (argv = []) => {
   // more quietly: same file, changed onCreate/agentName/maskPattern/typeDebounceMs,
   // and the open tab keeps answering with the previous run's settings. Hashing the
   // source (rather than the package version) means editing inject.js is enough.
-  const pageCfg = { ...pageConfig(cfg), createHook: !!createHook };
+  const pageCfg = { ...pageConfig(cfg), createHook: !!createHook, queueName: path.basename(queueFile) };
   const scriptVersion = crypto
     .createHash('sha1')
     .update(rawInject + ' ' + JSON.stringify(pageCfg))
@@ -286,7 +347,7 @@ const record = async (argv = []) => {
           if (evt.kind === 'warning' && String(evt.value).startsWith('widget-')) {
             console.log('\n  ⚠ the on-page widget did not appear: ' + (evt.note || evt.value));
             console.log('    Try a normal app page — browser-internal pages block injection.\n');
-            write({ ...evt, url: page.url() });
+            write({ ...evt, url: safeUrl(page.url()) });
             return;
           }
           // markers + notes always land; interaction events only while recording
@@ -306,7 +367,7 @@ const record = async (argv = []) => {
             }
             return;
           }
-          write({ ...evt, url: page.url() });
+          write({ ...evt, url: safeUrl(page.url()) });
         } catch (_) {}
       })
       .catch(() => {});
@@ -367,7 +428,9 @@ const record = async (argv = []) => {
           lastNet = { key, ts: now };
           write({
             kind: 'net',
-            value: req.method() + ' ' + (u.pathname + u.search).slice(0, 140),
+            // The query string is kept — it tells the converter what the call took —
+            // but credential-bearing values are stripped out of it first.
+            value: req.method() + ' ' + (u.pathname + redactSearch(u.search)).slice(0, 140),
             status: res.status(),
           });
         } catch (_) {}
@@ -399,6 +462,16 @@ const record = async (argv = []) => {
   console.log('  ✎  note / intent                        ⌥/Alt+Click  assert an element');
   console.log('  ⚡  queue the finished segment(s) for ' + (cfg.agentName || 'the AI agent'));
   console.log('  ⠿  drag the widget out of the way       Ctrl+C  finish the session\n');
+  // This file is meant to be handed to an AI agent, so what it does and does not
+  // keep is not a footnote. Stated once, up front, before anything is captured.
+  console.log(
+    'Privacy: ' +
+      (cfg.maskAllInput
+        ? 'every typed value is masked (maskAllInput)'
+        : 'password fields and names matching maskPattern are masked') +
+      '; credential-bearing URL parameters are redacted.'
+  );
+  console.log('   Recordings are git-ignored where they are written: ' + outDir + '\n');
   // Say plainly whether ⚡ will reach anything. Silence here is what made people
   // assume the click dispatched something when it only wrote a file.
   if (createHook) {
@@ -410,12 +483,57 @@ const record = async (argv = []) => {
     if (rawHook && !hooksEnabled) console.log('   (an onCreate command IS configured but --no-hooks was passed)\n');
   }
 
+  // The last thing the user sees has to say what they are still holding. A segment
+  // that was never ⚡'d, and a ⚡'d scenario nothing ever drained, are both silent
+  // losses otherwise: the files sit on disk, correct and complete, and no line ever
+  // tells anyone they are there. Printed on every exit path.
+  const printHandoffSummary = () => {
+    const ack = readAck() || {};
+    const items = ack.items || {};
+    const legacy = !ack.items && ack.status ? ack : null;
+    const statusOf = (q) => {
+      const st = items[q.id] || (legacy && q.id === ack.current ? legacy : null);
+      return (st && st.status) || q.status;
+    };
+    const pending = state.queue.filter((q) => statusOf(q) !== 'done');
+    const unqueued = state.segmentNames.slice(state.queue.length);
+    // Quitting mid-segment is the quietest loss of all: the events are in the file
+    // but there is no ⏹, so the segment was never counted, never queueable, and
+    // nothing anywhere said so.
+    const openSegment = state.recording ? state.scenario || '(unnamed)' : null;
+    if (!pending.length && !unqueued.length && !openSegment) return;
+
+    console.log('');
+    if (openSegment) console.log('Still recording at exit, never stopped with ⏹:  ' + openSegment);
+    if (unqueued.length) {
+      console.log(unqueued.length + ' recorded segment(s) never queued with ⚡:');
+      for (const n of unqueued) console.log('   · ' + n);
+    }
+    if (pending.length) {
+      console.log(pending.length + ' queued scenario(s) not converted:');
+      for (const q of pending) console.log('   · ' + q.scenario + '  [' + statusOf(q) + ']');
+      console.log('Queue file: ' + queueFile);
+    }
+    if (!createHook && (pending.length || unqueued.length)) {
+      console.log(
+        '\nNothing was watching the queue — no `onCreate` hook is set, so ⚡ wrote the\n' +
+          'files above and nothing else. To convert them, point ' + (cfg.agentName || 'your AI agent') + ' at this\n' +
+          'session file, or set `onCreate` in ' + (loaded.configFile ? path.basename(loaded.configFile) : 'your config') +
+          ' so ⚡ starts it for you.'
+      );
+    } else if (createHook && pending.length) {
+      console.log('\nThe onCreate hook holds the queue; it can be re-drained from the file above.');
+    }
+  };
+
   let stopping = false;
   const stop = async () => {
     if (stopping) return;
     stopping = true;
     write({ kind: 'marker', value: 'session-end' });
+    releaseLock();
     console.log('\nRecording saved: ' + file);
+    printHandoffSummary();
     if (launched) await browser.close().catch(() => {});
     process.exit(0);
   };
@@ -424,7 +542,9 @@ const record = async (argv = []) => {
 
   browser.on('disconnected', () => {
     if (stopping) return;
+    releaseLock();
     console.log('\nBrowser closed — recording saved: ' + file);
+    printHandoffSummary();
     process.exit(0);
   });
 };

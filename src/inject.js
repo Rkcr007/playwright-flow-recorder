@@ -59,11 +59,54 @@
   } catch (_) {
     MASK = /pass|pwd|otp|pin|secret|token|cvv|card.?number/i;
   }
+  // Opt-in: mask every typed value regardless of field name. The only defence when
+  // the field is called `j_idt42` and no pattern can tell what it holds.
+  const MASK_ALL = !!CFG.maskAllInput;
   const TYPE_DEBOUNCE = Number(CFG.typeDebounceMs) > 0 ? Number(CFG.typeDebounceMs) : 900;
   const AGENT = CFG.agentName || 'the AI agent';
   // Whether an `onCreate` command is wired up Node-side. Drives the ⚡ readout:
   // with a hook the click really does start something, without one it only queues.
   const HAS_HOOK = !!CFG.createHook;
+  // Basename of this session's queue file, so the panel can name the thing an
+  // agent has to be pointed at. Without it "ask your agent to drain the queue"
+  // is advice the user cannot act on.
+  const QUEUE_NAME = CFG.queueName || '';
+
+  // Page-side twin of redactUrl() in config.js — same contract, because `nav`
+  // events are emitted from here while the per-event `url` stamp is added Node-side,
+  // and a URL scrubbed on only one of those two paths is not scrubbed at all.
+  // Keeps origin, path and parameter NAMES; replaces credential-bearing values.
+  let REDACT;
+  try {
+    REDACT = new RegExp('^(?:' + (CFG.redactUrlParams || 'token|code|key|secret|session|auth') + ')$', 'i');
+  } catch (_) {
+    REDACT = /^(?:token|code|key|secret|session|auth)$/i;
+  }
+  // Per name-component, so access_token / id_token / apiKey are caught without
+  // also redacting zipcode, monkey or keyword. Mirrors sensitive() in config.js.
+  const sensitiveParam = (name) =>
+    String(name)
+      .split(/[^A-Za-z0-9]+|(?<=[a-z0-9])(?=[A-Z])/)
+      .some((part) => part && REDACT.test(part));
+  const scrubPairs = (s) =>
+    String(s).replace(/([?#&]|^)([^=&#?]+)=([^&#]*)/g, (m, lead, k) => {
+      let name = k;
+      try { name = decodeURIComponent(k); } catch (_) {}
+      return sensitiveParam(name.trim()) ? lead + k + '=***' : m;
+    });
+  const redactUrl = (url) => {
+    const raw = String(url == null ? '' : url);
+    if (!raw) return raw;
+    try {
+      const u = new URL(raw);
+      if (u.password) u.password = '***';
+      Array.from(u.searchParams.keys()).forEach((k) => { if (sensitiveParam(k)) u.searchParams.set(k, '***'); });
+      if (u.hash.length > 1) u.hash = scrubPairs(u.hash);
+      return u.href;
+    } catch (_) {
+      return scrubPairs(raw);
+    }
+  };
 
   const ACTIONABLE =
     'button,a,[role="button"],[role="link"],[role="menuitem"],[role="menuitemcheckbox"],' +
@@ -229,7 +272,8 @@
         .slice(0, 25)
         .map((f) => {
           if (f.type === 'hidden' || !(f.offsetWidth || f.offsetHeight)) return null;
-          const masked = f.type === 'password' || MASK.test([f.type, f.name, f.id, f.placeholder].join(' '));
+          const masked =
+            MASK_ALL || f.type === 'password' || MASK.test([f.type, f.name, f.id, f.placeholder].join(' '));
           const label = accessibleName(f) || f.name || f.id || f.tagName.toLowerCase();
           const value = f.tagName === 'SELECT' ? (f.selectedOptions[0] || {}).textContent : f.value;
           return value
@@ -477,7 +521,7 @@
         clearTimeout(rec.timer);
         pendingTypes.delete(el);
         const hint = [attr(el, 'type'), attr(el, 'name'), attr(el, 'id'), attr(el, 'placeholder'), accessibleName(el)].join(' ');
-        const masked = attr(el, 'type') === 'password' || MASK.test(hint);
+        const masked = MASK_ALL || attr(el, 'type') === 'password' || MASK.test(hint);
         const value = el.isContentEditable ? visibleText(el) : el.value;
         emit({ kind: 'type', value: masked ? '***masked***' : value, ...describe(el) });
       };
@@ -554,7 +598,7 @@
   );
 
   // --- navigation (full loads + SPA route changes) ---
-  const nav = (how) => emit({ kind: 'nav', how, value: location.href });
+  const nav = (how) => emit({ kind: 'nav', how, value: redactUrl(location.href) });
   const _push = history.pushState;
   history.pushState = function (...a) { _push.apply(this, a); nav('pushState'); };
   const _replace = history.replaceState;
@@ -693,6 +737,10 @@
           '.pmsg{font-size:11px;color:#e2e8f0;margin-top:4px;line-height:1.45}' +
           '.pdet{font-size:11px;color:rgba(232,234,237,.62);margin-top:2px;line-height:1.45}' +
           '.pdet.dim{color:rgba(232,234,237,.42)}' +
+          '.pfoot{margin-top:8px;padding:7px 9px 1px;border-top:1px solid rgba(255,255,255,.1);' +
+          'font-size:11px;line-height:1.5;color:rgba(232,234,237,.66)}' +
+          '.pfoot .dim{color:rgba(232,234,237,.42);margin-top:3px}' +
+          '.pfoot .pfile{margin:4px 0 2px}' +
           '.pfile{font-size:10px;margin-top:4px;color:#a5b4fc;' +
           "font-family:ui-monospace,SFMono-Regular,Menlo,monospace;overflow:hidden;" +
           'text-overflow:ellipsis;white-space:nowrap}' +
@@ -806,7 +854,18 @@
       const items = queue || [];
       // Auto-open when any item changes into a state the user is waiting to hear about.
       const sig = items.map((q) => q.id + ':' + q.status + ':' + q.message).join('|');
-      const notable = items.some((q) => q.status === 'working' || q.status === 'error' || q.status === 'done');
+      // …including a queue with nothing wired to drain it. That case USED to be the
+      // one the panel never opened for, which made it the one case the user was left
+      // guessing about: the bar said "1 queued · awaiting pickup" indefinitely and
+      // the explanation sat in a panel nobody knew to open. It is the moment that
+      // most needs interrupting for — no agent is coming unless they go and get one.
+      const notable = items.some(
+        (q) =>
+          q.status === 'working' ||
+          q.status === 'error' ||
+          q.status === 'done' ||
+          (q.status === 'queued' && !HAS_HOOK)
+      );
       if (sig !== lastSig) {
         const prev = lastSig;
         lastSig = sig;
@@ -851,6 +910,17 @@
           rows.push(mk('div', { class: 'pdet dim', text: '· waiting for ' + AGENT + ' to pick this up' }));
         }
         cards.push(mk('div', { class: 'pcard ' + st }, rows));
+      }
+      // Said once at the foot rather than per card: with nothing wired to the queue,
+      // "queued" is a state the user has to act on, and the action is not guessable.
+      if (!HAS_HOOK && items.some((q) => q.status === 'queued')) {
+        cards.push(
+          mk('div', { class: 'pfoot' }, [
+            mk('div', { text: 'Nothing is watching this queue — ' + AGENT + ' has to come and read it.' }),
+            QUEUE_NAME ? mk('div', { class: 'pfile', text: QUEUE_NAME }) : null,
+            mk('div', { class: 'dim', text: 'Set onCreate in flow-recorder.config.json to start it on every ⚡.' }),
+          ].filter(Boolean))
+        );
       }
       panel.replaceChildren(...cards);
       const close = panel.querySelector('#pclose');
@@ -946,13 +1016,13 @@
     try {
       makeWidget();
       if (!document.getElementById('__flow_rec_host')) {
-        emit({ kind: 'warning', value: 'widget-missing', note: 'widget did not mount on ' + location.href });
+        emit({ kind: 'warning', value: 'widget-missing', note: 'widget did not mount on ' + redactUrl(location.href) });
       }
     } catch (e) {
       emit({
         kind: 'warning',
         value: 'widget-failed',
-        note: String((e && e.message) || e).slice(0, 160) + ' @ ' + location.href,
+        note: String((e && e.message) || e).slice(0, 160) + ' @ ' + redactUrl(location.href),
       });
     }
   };

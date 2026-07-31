@@ -104,8 +104,22 @@ let browser;
     fs.readFileSync(fs.readFileSync(path.join(plain.outDir, 'latest.txt'), 'utf8').trim() + '.queue.json', 'utf8')
   );
   const plainSaysSo = /nothing is spawned/.test(plain.out());
+  // With nothing wired to the queue, the detail panel is the ONLY place that can
+  // explain why "queued" is not going to become "done" on its own. It used to open
+  // for working/done/error only — i.e. never in this case — so the bar sat on
+  // "awaiting pickup" indefinitely with the explanation hidden behind a click
+  // nobody knew to make.
+  const plainPanel = await page.evaluate(() => {
+    const h = document.getElementById('__flow_rec_host');
+    const p = h && h.shadowRoot && h.shadowRoot.getElementById('panel');
+    if (!p) return { shown: false, text: '' };
+    return { shown: getComputedStyle(p).display !== 'none', text: (p.textContent || '').replace(/\s+/g, ' ') };
+  });
   plain.rec.kill('SIGINT');
-  await sleep(600);
+  await sleep(800);
+  // …and the console has to repeat it on the way out, for the user who quit the
+  // session and would otherwise never learn the scenario is still sitting there.
+  const plainExit = plain.out();
 
   // --- 2. hook configured: ⚡ runs it, with context in the environment ----------
   const hooked = await setup({ onCreate: 'SCRIPT' });
@@ -152,6 +166,16 @@ let browser;
     'no onCreate → startup says ⚡ dispatches nothing': plainSaysSo,
     'no onCreate → widget does not claim delivery, it says awaiting pickup':
       /awaiting pickup/.test(plainReadout),
+    'no onCreate → the panel opens itself, unprompted': plainPanel.shown,
+    'no onCreate → the panel says nothing is watching the queue':
+      /Nothing is watching this queue/.test(plainPanel.text),
+    'no onCreate → the panel names the queue file to point an agent at':
+      /\.queue\.json/.test(plainPanel.text),
+    'no onCreate → the panel gives the fix (onCreate)': /Set onCreate/.test(plainPanel.text),
+    'no onCreate → quitting lists what was never converted':
+      /1 queued scenario\(s\) not converted/.test(plainExit) && /· no-hook/.test(plainExit),
+    'no onCreate → quitting says why, and what to do about it':
+      /Nothing was watching the queue/.test(plainExit),
 
     // 2
     'onCreate set → ⚡ actually runs the command': fired.length === 1,
