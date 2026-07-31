@@ -608,14 +608,21 @@
 
     <div id="outWrap" hidden>
       <div class="panel" style="margin-top:20px">
-        <div class="panel-hd">features/orders.feature <span class="spacer"></span><span id="outMeta"></span></div>
+        <div class="panel-hd">reconciliation report — nothing written yet <span class="spacer"></span><span id="outMeta"></span></div>
         <pre class="out" id="out"></pre>
       </div>
       <p class="fine" style="margin-top:12px">
-        Every line is marked. <span class="mono" style="color:var(--text-faint)">[existing]</span> reuses a step
-        already in your repo; <span class="mono" style="color:var(--rec)">[NEW]</span> is the only thing that
-        needed writing. You approve that diff before anything is created — which is what stops a suite growing a
-        duplicate of every step it already had. It lands tagged <code>@wip</code>, so a human reviews it before CI runs it.
+        This is the <b>report the agent shows you before it creates anything</b>, not the file.
+        <span class="mono" style="color:var(--text-faint)">[existing]</span> reuses a step already in your repo;
+        <span class="mono" style="color:var(--rec)">[NEW]</span> is the only thing that needed writing.
+        You approve that diff — and only then is the scenario appended to
+        <code>features/orders.feature</code>, without the markers, tagged <code>@wip</code> so a human reviews it
+        before CI runs it. That approval gate is what stops a suite growing a duplicate of every step it already had.
+      </p>
+      <p class="fine" style="margin-top:-4px">
+        <b>Timing is compressed here.</b> The hand-off above resolves in about two seconds; a real conversion takes
+        minutes — reading the segment, building the reuse index, reconciling, running your dry-run command and
+        fixing what fails.
       </p>
     </div>
   </div>
@@ -807,6 +814,49 @@ npx flow-recorder <span class="p">record</span></pre>
       <li><b>Chrome 136+</b> silently ignores the debug port on your default profile — which is why the tool insists on a dedicated one.</li>
       <li><b>One session per account</b> on many staging environments: a dry-run will log out your recording browser.</li>
     </ul>
+  </section>
+
+  <!-- ============ HONESTY ============ -->
+  <section>
+    <p class="eyebrow">What this demo simplifies</p>
+    <h2 class="narrow">Three things above aren't in the product</h2>
+    <p class="lede narrow" style="margin-bottom:22px">
+      The HUD, its states, the assert predicates, the event shapes and the hand-off panel are the real thing.
+      These are not, and you should know before you install it:
+    </p>
+    <div class="steps narrow">
+      <div class="step">
+        <span class="marker">1</span>
+        <div>
+          <h3>There's no event panel beside your app</h3>
+          <p class="fine" style="margin:0">
+            Events go to the recorder's terminal and to a <code>.jsonl</code> file. The panel here exists to make
+            the stream visible while you click — the real HUD is just the bar.
+          </p>
+        </div>
+      </div>
+      <div class="step">
+        <span class="marker">2</span>
+        <div>
+          <h3>There's no ⌥ assert button</h3>
+          <p class="fine" style="margin:0">
+            The real bar has exactly three buttons. You ⌥/Alt+Click an element directly and the palette opens.
+            A mode toggle stands in here because Alt+Click is unreliable inside a web page.
+          </p>
+        </div>
+      </div>
+      <div class="step">
+        <span class="marker">3</span>
+        <div>
+          <h3>Idle clicks leave no trace at all</h3>
+          <p class="fine" style="margin:0">
+            The greyed "ignored" lines and the counter are invented for this demo, to render an absence. In the
+            real recording those clicks simply don't exist — the only thing they can produce is a warning if you
+            click for a long time without pressing ⏺, in case you forgot.
+          </p>
+        </div>
+      </div>
+    </div>
   </section>
 
   <footer>
@@ -1163,7 +1213,9 @@ npx flow-recorder <span class="p">record</span></pre>
         outWrap.hidden = false;
         out.textContent = '';
         typeOut(0);
-        hint.textContent = 'That scenario now reuses 5 steps you already had. Only the approve step was new.';
+        /* the disclosure has to live in the frame — anyone watching the recording
+           of this page never scrolls down to a footnote */
+        hint.textContent = 'Reuses 5 steps you already had. You approve this report before anything is written — and a real conversion takes minutes, not seconds.';
       }, reduce ? 30 : 2400);
     });
 
